@@ -5,3 +5,4 @@ authors = ["Wojtek Swiderski <wswiders@uwaterloo.ca>"]
 edition = "2018"
 
 [dependencies]
+core = { path = "../core" }
