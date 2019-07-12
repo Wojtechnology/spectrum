@@ -4,17 +4,17 @@ use std::io;
 use std::io::Read;
 
 #[derive(Debug)]
-pub enum Error {
+pub enum DecoderError {
     Io(io::Error),
-    IllFormed,
     Application(&'static str),
+    IllFormed,
     Empty,
 }
 
 pub mod mp3 {
     use minimp3::{Decoder, Error as Mp3Error, Frame};
 
-    use super::{Error, Read};
+    use super::{DecoderError, Read};
 
     pub struct Mp3Decoder<R> {
         decoder: Decoder<R>,
@@ -26,16 +26,16 @@ pub mod mp3 {
     where
         R: Read,
     {
-        pub fn new(reader: R) -> Result<Mp3Decoder<R>, Error> {
+        pub fn new(reader: R) -> Result<Mp3Decoder<R>, DecoderError> {
             let mut decoder = Decoder::new(reader);
             let current_frame = loop {
                 match decoder.next_frame() {
                     Ok(frame) => break Ok(frame),
-                    Err(Mp3Error::Io(err)) => break Err(Error::Io(err)),
+                    Err(Mp3Error::Io(err)) => break Err(DecoderError::Io(err)),
                     Err(Mp3Error::InsufficientData) => {
-                        break Err(Error::Application("Insufficient data"))
+                        break Err(DecoderError::Application("Insufficient data"))
                     }
-                    Err(Mp3Error::Eof) => break Err(Error::Empty),
+                    Err(Mp3Error::Eof) => break Err(DecoderError::Empty),
                     Err(Mp3Error::SkippedData) => continue,
                 }
             }?;
