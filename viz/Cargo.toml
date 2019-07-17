@@ -1,0 +1,9 @@
+[package]
+name = "viz"
+version = "0.1.0"
+authors = ["Wojtek Swiderski <wswiders@uwaterloo.ca>"]
+edition = "2018"
+
+[dependencies]
+core = { path = "../core" }
+cpal = "0.10.0"
