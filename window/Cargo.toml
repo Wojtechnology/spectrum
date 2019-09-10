@@ -1,0 +1,13 @@
+[package]
+name = "window"
+version = "0.1.0"
+authors = ["Wojtek Swiderski <wswiders@uwaterloo.ca>"]
+edition = "2018"
+
+[dependencies]
+log = "0.4.0"
+simple_logger = "1.0"
+winit = "0.18"
+gfx-hal = "0.1"
+arrayvec = "0.4"
+gfx-backend-metal = "0.1"

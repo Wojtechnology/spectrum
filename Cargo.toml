@@ -3,4 +3,5 @@ members = [
     "core",
     "stream-gen",
     "viz",
+    "window",
 ]
