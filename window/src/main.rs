@@ -1,28 +1,10 @@
 #![cfg_attr(
-    not(any(
-        feature = "vulkan",
-        feature = "dx11",
-        feature = "dx12",
-        feature = "metal",
-        feature = "gl"
-    )),
+    not(any(feature = "vulkan", feature = "metal",)),
     allow(dead_code, unused_extern_crates, unused_imports)
 )]
 
-#[cfg(feature = "dx11")]
-extern crate gfx_backend_dx11 as back;
-#[cfg(feature = "dx12")]
-extern crate gfx_backend_dx12 as back;
-#[cfg(not(any(
-    feature = "vulkan",
-    feature = "dx11",
-    feature = "dx12",
-    feature = "metal",
-    feature = "gl"
-)))]
+#[cfg(not(any(feature = "vulkan", feature = "metal",)))]
 extern crate gfx_backend_empty as back;
-#[cfg(feature = "gl")]
-extern crate gfx_backend_gl as back;
 #[cfg(feature = "metal")]
 extern crate gfx_backend_metal as back;
 #[cfg(feature = "vulkan")]
@@ -30,10 +12,10 @@ extern crate gfx_backend_vulkan as back;
 
 #[macro_use]
 extern crate log;
+extern crate env_logger;
 extern crate gfx_hal as hal;
 extern crate glsl_to_spirv;
 extern crate image;
-extern crate simple_logger;
 extern crate winit;
 
 struct Dimensions<T> {
@@ -103,17 +85,9 @@ const COLOR_RANGE: i::SubresourceRange = i::SubresourceRange {
     layers: 0..1,
 };
 
-trait SurfaceTrait {
-    #[cfg(feature = "gl")]
-    fn get_context_t(&self) -> &back::glutin::RawContext<back::glutin::PossiblyCurrent>;
-}
+trait SurfaceTrait {}
 
-impl SurfaceTrait for <back::Backend as hal::Backend>::Surface {
-    #[cfg(feature = "gl")]
-    fn get_context_t(&self) -> &back::glutin::RawContext<back::glutin::PossiblyCurrent> {
-        self.get_context()
-    }
-}
+impl SurfaceTrait for <back::Backend as hal::Backend>::Surface {}
 
 struct RendererState<B: Backend> {
     uniform_desc_pool: Option<B::DescriptorPool>,
@@ -368,8 +342,6 @@ impl<B: Backend> RendererState<B> {
         while running {
             {
                 let uniform = &mut self.uniform;
-                #[cfg(feature = "gl")]
-                let backend = &self.backend;
 
                 self.window.events_loop.poll_events(|event| {
                     if let winit::Event::WindowEvent { event, .. } = event {
@@ -385,11 +357,6 @@ impl<B: Backend> RendererState<B> {
                             }
                             | winit::WindowEvent::CloseRequested => running = false,
                             winit::WindowEvent::Resized(dims) => {
-                                #[cfg(feature = "gl")]
-                                backend
-                                    .surface
-                                    .get_context_t()
-                                    .resize(dims.to_physical(backend.window.get_hidpi_factor()));
                                 recreate_swapchain = true;
                             }
                             winit::WindowEvent::KeyboardInput {
@@ -658,12 +625,7 @@ struct BackendState<B: Backend> {
     window: winit::Window,
 }
 
-#[cfg(any(
-    feature = "vulkan",
-    feature = "dx11",
-    feature = "dx12",
-    feature = "metal"
-))]
+#[cfg(any(feature = "vulkan", feature = "metal"))]
 fn create_backend(window_state: &mut WindowState) -> (BackendState<back::Backend>, back::Instance) {
     let window = window_state
         .wb
@@ -681,35 +643,6 @@ fn create_backend(window_state: &mut WindowState) -> (BackendState<back::Backend
             window,
         },
         instance,
-    )
-}
-
-#[cfg(feature = "gl")]
-fn create_backend(window_state: &mut WindowState) -> (BackendState<back::Backend>, ()) {
-    let (context, window) = {
-        let builder =
-            back::config_context(back::glutin::ContextBuilder::new(), ColorFormat::SELF, None)
-                .with_vsync(true);
-        let windowed_context = builder
-            .build_windowed(window_state.wb.take().unwrap(), &window_state.events_loop)
-            .unwrap();
-        unsafe {
-            windowed_context
-                .make_current()
-                .expect("Unable to make context current")
-                .split()
-        }
-    };
-
-    let surface = back::Surface::from_context(context);
-    let mut adapters = surface.enumerate_adapters();
-    (
-        BackendState {
-            adapter: AdapterState::new(&mut adapters),
-            surface,
-            window,
-        },
-        (),
     )
 }
 
@@ -1686,15 +1619,9 @@ impl<B: Backend> Drop for FramebufferState<B> {
     }
 }
 
-#[cfg(any(
-    feature = "vulkan",
-    feature = "dx11",
-    feature = "dx12",
-    feature = "metal",
-    feature = "gl"
-))]
+#[cfg(any(feature = "vulkan", feature = "metal",))]
 fn main() {
-    simple_logger::init();
+    env_logger::init();
 
     let mut window = WindowState::new();
     let (backend, _instance) = create_backend(&mut window);
@@ -1703,13 +1630,7 @@ fn main() {
     renderer_state.mainloop();
 }
 
-#[cfg(not(any(
-    feature = "vulkan",
-    feature = "dx11",
-    feature = "dx12",
-    feature = "metal",
-    feature = "gl"
-)))]
+#[cfg(not(any(feature = "vulkan", feature = "metal",)))]
 fn main() {
     println!("You need to enable the native API feature (vulkan/metal) in order to test the LL");
 }

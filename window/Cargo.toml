@@ -19,7 +19,7 @@ gfx-hal = "0.3"
 gfx-backend-empty = "0.3"
 
 [target.'cfg(debug_assertions)'.dependencies]
-simple_logger = "1.3"
+env_logger = "0.6"
 
 [dependencies.gfx-backend-vulkan]
 version = "0.3"
