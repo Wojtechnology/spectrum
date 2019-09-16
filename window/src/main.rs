@@ -46,6 +46,10 @@ const DIMS: Extent2D = Extent2D {
     height: 768,
 };
 
+pub type Triangle = [[f32; 2]; 3];
+
+const TRIANGLE: Triangle = [[-0.5, 0.5], [-0.5, -0.5], [0.5, -0.33]];
+
 #[derive(Debug, Clone, Copy)]
 struct Vertex {
     a_pos: [f32; 2],
@@ -97,6 +101,7 @@ struct RendererState<B: Backend> {
     backend: BackendState<B>,
     window: WindowState,
     vertex_buffer: BufferState<B>,
+    triangle_vertex_buffer: BufferState<B>,
     render_pass: RenderPassState<B>,
     uniform: Uniform<B>,
     pipeline: PipelineState<B>,
@@ -211,6 +216,13 @@ impl<B: Backend> RendererState<B> {
             &mut staging_pool,
         );
 
+        let triangle_vertex_buffer = BufferState::new::<[f32; 2]>(
+            Rc::clone(&device),
+            &TRIANGLE,
+            buffer::Usage::VERTEX,
+            &backend.adapter.memory_types,
+        );
+
         let vertex_buffer = BufferState::new::<Vertex>(
             Rc::clone(&device),
             &QUAD,
@@ -243,7 +255,7 @@ impl<B: Backend> RendererState<B> {
             swapchain.as_mut().unwrap(),
         );
 
-        let pipeline = PipelineState::new(
+        let pipeline = PipelineState::new_triangle(
             vec![image.get_layout(), uniform.get_layout()],
             render_pass.render_pass.as_ref().unwrap(),
             Rc::clone(&device),
@@ -259,6 +271,7 @@ impl<B: Backend> RendererState<B> {
             img_desc_pool,
             uniform_desc_pool,
             vertex_buffer,
+            triangle_vertex_buffer,
             uniform,
             render_pass,
             pipeline,
@@ -289,14 +302,22 @@ impl<B: Backend> RendererState<B> {
         };
 
         self.pipeline = unsafe {
-            PipelineState::new(
+            PipelineState::new_triangle(
                 vec![self.image.get_layout(), self.uniform.get_layout()],
                 self.render_pass.render_pass.as_ref().unwrap(),
                 Rc::clone(&self.device),
             )
         };
 
-        self.viewport = RendererState::create_viewport(self.swapchain.as_ref().unwrap());
+        // self.pipeline = unsafe {
+        //     PipelineState::new(
+        //         vec![self.image.get_layout(), self.uniform.get_layout()],
+        //         self.render_pass.render_pass.as_ref().unwrap(),
+        //         Rc::clone(&self.device),
+        //     )
+        // };
+
+        self.viewport = Self::create_viewport(self.swapchain.as_ref().unwrap());
     }
 
     fn create_viewport(swapchain: &SwapchainState<B>) -> pso::Viewport {
@@ -308,6 +329,224 @@ impl<B: Backend> RendererState<B> {
                 h: swapchain.extent.height as i16,
             },
             depth: 0.0..1.0,
+        }
+    }
+
+    fn draw_triangle(
+        &mut self,
+        cr: f32,
+        cg: f32,
+        cb: f32,
+        x: f32,
+        y: f32,
+    ) -> Result<(), &'static str> {
+        let sem_index = self.framebuffer.next_acq_pre_pair_index();
+
+        let frame: hal::SwapImageIndex = unsafe {
+            let (acquire_semaphore, _) = self
+                .framebuffer
+                .get_frame_data(None, Some(sem_index))
+                .1
+                .unwrap();
+            match self
+                .swapchain
+                .as_mut()
+                .unwrap()
+                .swapchain
+                .as_mut()
+                .unwrap()
+                .acquire_image(!0, Some(acquire_semaphore), None)
+            {
+                Ok((i, _)) => Ok(i),
+                Err(_) => Err("Couldn't find frame"),
+            }?
+        };
+
+        let (fid, sid) = self
+            .framebuffer
+            .get_frame_data(Some(frame as usize), Some(sem_index));
+
+        let (framebuffer_fence, framebuffer, command_pool, command_buffers) = fid.unwrap();
+        let (image_acquired, image_present) = sid.unwrap();
+        unsafe {
+            self.device
+                .borrow()
+                .device
+                .wait_for_fence(framebuffer_fence, !0)
+                .unwrap();
+            self.device
+                .borrow()
+                .device
+                .reset_fence(framebuffer_fence)
+                .unwrap();
+            command_pool.reset(false);
+
+            let triangle = [[-0.5, 0.5], [-0.5, -0.5], [x, y]];
+            self.triangle_vertex_buffer.update_data(0, &triangle);
+
+            // Rendering
+            let mut cmd_buffer = match command_buffers.pop() {
+                Some(cmd_buffer) => cmd_buffer,
+                None => command_pool.acquire_command_buffer(),
+            };
+            cmd_buffer.begin();
+            cmd_buffer.set_viewports(0, &[self.viewport.clone()]);
+            cmd_buffer.set_scissors(0, &[self.viewport.rect]);
+            cmd_buffer.bind_graphics_pipeline(self.pipeline.pipeline.as_ref().unwrap());
+            cmd_buffer.bind_vertex_buffers(0, Some((self.triangle_vertex_buffer.get_buffer(), 0)));
+            cmd_buffer.bind_graphics_descriptor_sets(
+                self.pipeline.pipeline_layout.as_ref().unwrap(),
+                0,
+                vec![
+                    self.image.desc.set.as_ref().unwrap(),
+                    self.uniform.desc.as_ref().unwrap().set.as_ref().unwrap(),
+                ],
+                &[],
+            ); //TODO
+
+            {
+                let mut encoder = cmd_buffer.begin_render_pass_inline(
+                    self.render_pass.render_pass.as_ref().unwrap(),
+                    framebuffer,
+                    self.viewport.rect,
+                    &[command::ClearValue::Color(command::ClearColor::Sfloat([
+                        cr, cg, cb, 1.0,
+                    ]))],
+                );
+                encoder.draw(0..6, 0..1);
+            }
+            cmd_buffer.finish();
+
+            let submission = Submission {
+                command_buffers: iter::once(&cmd_buffer),
+                wait_semaphores: iter::once((&*image_acquired, PipelineStage::BOTTOM_OF_PIPE)),
+                signal_semaphores: iter::once(&*image_present),
+            };
+
+            self.device.borrow_mut().queues.queues[0].submit(submission, Some(framebuffer_fence));
+            command_buffers.push(cmd_buffer);
+
+            // present frame
+            match self
+                .swapchain
+                .as_ref()
+                .unwrap()
+                .swapchain
+                .as_ref()
+                .unwrap()
+                .present(
+                    &mut self.device.borrow_mut().queues.queues[0],
+                    frame,
+                    Some(&*image_present),
+                ) {
+                Ok(_) => Ok(()),
+                Err(_) => Err("Failed to present"),
+            }
+        }
+    }
+
+    fn draw_rust_logo(&mut self, cr: f32, cg: f32, cb: f32) -> Result<(), &'static str> {
+        let sem_index = self.framebuffer.next_acq_pre_pair_index();
+
+        let frame: hal::SwapImageIndex = unsafe {
+            let (acquire_semaphore, _) = self
+                .framebuffer
+                .get_frame_data(None, Some(sem_index))
+                .1
+                .unwrap();
+            match self
+                .swapchain
+                .as_mut()
+                .unwrap()
+                .swapchain
+                .as_mut()
+                .unwrap()
+                .acquire_image(!0, Some(acquire_semaphore), None)
+            {
+                Ok((i, _)) => Ok(i),
+                Err(_) => Err("Couldn't find frame"),
+            }?
+        };
+
+        let (fid, sid) = self
+            .framebuffer
+            .get_frame_data(Some(frame as usize), Some(sem_index));
+
+        let (framebuffer_fence, framebuffer, command_pool, command_buffers) = fid.unwrap();
+        let (image_acquired, image_present) = sid.unwrap();
+
+        unsafe {
+            self.device
+                .borrow()
+                .device
+                .wait_for_fence(framebuffer_fence, !0)
+                .unwrap();
+            self.device
+                .borrow()
+                .device
+                .reset_fence(framebuffer_fence)
+                .unwrap();
+            command_pool.reset(false);
+
+            // Rendering
+            let mut cmd_buffer = match command_buffers.pop() {
+                Some(cmd_buffer) => cmd_buffer,
+                None => command_pool.acquire_command_buffer(),
+            };
+            cmd_buffer.begin();
+
+            cmd_buffer.set_viewports(0, &[self.viewport.clone()]);
+            cmd_buffer.set_scissors(0, &[self.viewport.rect]);
+            cmd_buffer.bind_graphics_pipeline(self.pipeline.pipeline.as_ref().unwrap());
+            cmd_buffer.bind_vertex_buffers(0, Some((self.vertex_buffer.get_buffer(), 0)));
+            cmd_buffer.bind_graphics_descriptor_sets(
+                self.pipeline.pipeline_layout.as_ref().unwrap(),
+                0,
+                vec![
+                    self.image.desc.set.as_ref().unwrap(),
+                    self.uniform.desc.as_ref().unwrap().set.as_ref().unwrap(),
+                ],
+                &[],
+            ); //TODO
+
+            {
+                let mut encoder = cmd_buffer.begin_render_pass_inline(
+                    self.render_pass.render_pass.as_ref().unwrap(),
+                    framebuffer,
+                    self.viewport.rect,
+                    &[command::ClearValue::Color(command::ClearColor::Sfloat([
+                        cr, cg, cb, 1.0,
+                    ]))],
+                );
+                encoder.draw(0..6, 0..1);
+            }
+            cmd_buffer.finish();
+
+            let submission = Submission {
+                command_buffers: iter::once(&cmd_buffer),
+                wait_semaphores: iter::once((&*image_acquired, PipelineStage::BOTTOM_OF_PIPE)),
+                signal_semaphores: iter::once(&*image_present),
+            };
+
+            self.device.borrow_mut().queues.queues[0].submit(submission, Some(framebuffer_fence));
+            command_buffers.push(cmd_buffer);
+
+            // present frame
+            match self
+                .swapchain
+                .as_ref()
+                .unwrap()
+                .swapchain
+                .as_ref()
+                .unwrap()
+                .present(
+                    &mut self.device.borrow_mut().queues.queues[0],
+                    frame,
+                    Some(&*image_present),
+                ) {
+                Ok(_) => Ok(()),
+                Err(_) => Err("Failed to present"),
+            }
         }
     }
 
@@ -327,6 +566,9 @@ impl<B: Backend> RendererState<B> {
         let mut cg = 0.8;
         let mut cb = 0.8;
 
+        let mut x = 0.5;
+        let mut y = 0.5;
+
         let mut cur_color = Color::Red;
         let mut cur_value: u32 = 0;
 
@@ -342,6 +584,7 @@ impl<B: Backend> RendererState<B> {
         while running {
             {
                 let uniform = &mut self.uniform;
+                let viewport = &mut self.viewport;
 
                 self.window.events_loop.poll_events(|event| {
                     if let winit::Event::WindowEvent { event, .. } = event {
@@ -456,6 +699,11 @@ impl<B: Backend> RendererState<B> {
                                     )
                                 }
                             }
+                            winit::WindowEvent::CursorMoved { position, .. } => {
+                                x = (position.x as f32) / (viewport.rect.w as f32) * 4.0 - 1.0;
+                                y = (position.y as f32) / (viewport.rect.h as f32) * 4.0 - 1.0;
+                                println!("Mouse moved to {}, {}", x, y);
+                            }
                             _ => (),
                         }
                     }
@@ -467,113 +715,12 @@ impl<B: Backend> RendererState<B> {
                 recreate_swapchain = false;
             }
 
-            let sem_index = self.framebuffer.next_acq_pre_pair_index();
-
-            let frame: hal::SwapImageIndex = unsafe {
-                let (acquire_semaphore, _) = self
-                    .framebuffer
-                    .get_frame_data(None, Some(sem_index))
-                    .1
-                    .unwrap();
-                match self
-                    .swapchain
-                    .as_mut()
-                    .unwrap()
-                    .swapchain
-                    .as_mut()
-                    .unwrap()
-                    .acquire_image(!0, Some(acquire_semaphore), None)
-                {
-                    Ok((i, _)) => i,
-                    Err(_) => {
-                        recreate_swapchain = true;
-                        continue;
-                    }
+            match self.draw_triangle(cr, cg, cb, x, y) {
+                Ok(()) => (),
+                Err(_) => {
+                    recreate_swapchain = true;
                 }
             };
-
-            let (fid, sid) = self
-                .framebuffer
-                .get_frame_data(Some(frame as usize), Some(sem_index));
-
-            let (framebuffer_fence, framebuffer, command_pool, command_buffers) = fid.unwrap();
-            let (image_acquired, image_present) = sid.unwrap();
-
-            unsafe {
-                self.device
-                    .borrow()
-                    .device
-                    .wait_for_fence(framebuffer_fence, !0)
-                    .unwrap();
-                self.device
-                    .borrow()
-                    .device
-                    .reset_fence(framebuffer_fence)
-                    .unwrap();
-                command_pool.reset(false);
-
-                // Rendering
-                let mut cmd_buffer = match command_buffers.pop() {
-                    Some(cmd_buffer) => cmd_buffer,
-                    None => command_pool.acquire_command_buffer(),
-                };
-                cmd_buffer.begin();
-
-                cmd_buffer.set_viewports(0, &[self.viewport.clone()]);
-                cmd_buffer.set_scissors(0, &[self.viewport.rect]);
-                cmd_buffer.bind_graphics_pipeline(self.pipeline.pipeline.as_ref().unwrap());
-                cmd_buffer.bind_vertex_buffers(0, Some((self.vertex_buffer.get_buffer(), 0)));
-                cmd_buffer.bind_graphics_descriptor_sets(
-                    self.pipeline.pipeline_layout.as_ref().unwrap(),
-                    0,
-                    vec![
-                        self.image.desc.set.as_ref().unwrap(),
-                        self.uniform.desc.as_ref().unwrap().set.as_ref().unwrap(),
-                    ],
-                    &[],
-                ); //TODO
-
-                {
-                    let mut encoder = cmd_buffer.begin_render_pass_inline(
-                        self.render_pass.render_pass.as_ref().unwrap(),
-                        framebuffer,
-                        self.viewport.rect,
-                        &[command::ClearValue::Color(command::ClearColor::Sfloat([
-                            cr, cg, cb, 1.0,
-                        ]))],
-                    );
-                    encoder.draw(0..6, 0..1);
-                }
-                cmd_buffer.finish();
-
-                let submission = Submission {
-                    command_buffers: iter::once(&cmd_buffer),
-                    wait_semaphores: iter::once((&*image_acquired, PipelineStage::BOTTOM_OF_PIPE)),
-                    signal_semaphores: iter::once(&*image_present),
-                };
-
-                self.device.borrow_mut().queues.queues[0]
-                    .submit(submission, Some(framebuffer_fence));
-                command_buffers.push(cmd_buffer);
-
-                // present frame
-                if let Err(_) = self
-                    .swapchain
-                    .as_ref()
-                    .unwrap()
-                    .swapchain
-                    .as_ref()
-                    .unwrap()
-                    .present(
-                        &mut self.device.borrow_mut().queues.queues[0],
-                        frame,
-                        Some(&*image_present),
-                    )
-                {
-                    recreate_swapchain = true;
-                    continue;
-                }
-            }
         }
     }
 }
@@ -1251,6 +1398,25 @@ impl<B: Backend> Drop for ImageState<B> {
     }
 }
 
+unsafe fn read_shader_str<B: Backend>(
+    device: &B::Device,
+    shader_str: &str,
+    shader_type: glsl_to_spirv::ShaderType,
+) -> B::ShaderModule {
+    let file = glsl_to_spirv::compile(shader_str, shader_type).unwrap();
+    let spirv: Vec<u32> = hal::read_spirv(file).unwrap();
+    device.create_shader_module(&spirv).unwrap()
+}
+
+unsafe fn read_shader_file<B: Backend>(
+    device: &B::Device,
+    file_path: &str,
+    shader_type: glsl_to_spirv::ShaderType,
+) -> B::ShaderModule {
+    let glsl = fs::read_to_string(file_path).unwrap();
+    read_shader_str::<B>(device, &glsl, shader_type)
+}
+
 struct PipelineState<B: Backend> {
     pipeline: Option<B::GraphicsPipeline>,
     pipeline_layout: Option<B::PipelineLayout>,
@@ -1258,6 +1424,109 @@ struct PipelineState<B: Backend> {
 }
 
 impl<B: Backend> PipelineState<B> {
+    unsafe fn new_triangle<IS>(
+        desc_layouts: IS,
+        render_pass: &B::RenderPass,
+        device_ptr: Rc<RefCell<DeviceState<B>>>,
+    ) -> Self
+    where
+        IS: IntoIterator,
+        IS::Item: std::borrow::Borrow<B::DescriptorSetLayout>,
+    {
+        let device = &device_ptr.borrow().device;
+        let push_constants = Vec::<(ShaderStageFlags, core::ops::Range<u32>)>::new();
+        let pipeline_layout = device
+            .create_pipeline_layout(desc_layouts, push_constants)
+            .expect("Can't create pipeline layout");
+
+        let vs_module = read_shader_file::<B>(
+            device,
+            "src/data/tri.vert",
+            glsl_to_spirv::ShaderType::Vertex,
+        );
+        let fs_module = read_shader_file::<B>(
+            device,
+            "src/data/tri.frag",
+            glsl_to_spirv::ShaderType::Fragment,
+        );
+
+        let pipeline = {
+            let pipeline = {
+                let (vs_entry, fs_entry) = (
+                    pso::EntryPoint::<B> {
+                        entry: ENTRY_NAME,
+                        module: &vs_module,
+                        specialization: pso::Specialization::default(),
+                    },
+                    pso::EntryPoint::<B> {
+                        entry: ENTRY_NAME,
+                        module: &fs_module,
+                        specialization: pso::Specialization::default(),
+                    },
+                );
+
+                let shader_entries = pso::GraphicsShaderSet {
+                    vertex: vs_entry,
+                    hull: None,
+                    domain: None,
+                    geometry: None,
+                    fragment: Some(fs_entry),
+                };
+
+                let subpass = Subpass {
+                    index: 0,
+                    main_pass: render_pass,
+                };
+
+                let mut pipeline_desc = pso::GraphicsPipelineDesc::new(
+                    shader_entries,
+                    Primitive::TriangleList,
+                    pso::Rasterizer::FILL,
+                    &pipeline_layout,
+                    subpass,
+                );
+                pipeline_desc.blender.targets.push(pso::ColorBlendDesc {
+                    mask: pso::ColorMask::ALL,
+                    blend: Some(pso::BlendState::ALPHA),
+                });
+                pipeline_desc.vertex_buffers.push(pso::VertexBufferDesc {
+                    binding: 0,
+                    stride: size_of::<[f32; 2]>() as u32,
+                    rate: VertexInputRate::Vertex,
+                });
+
+                pipeline_desc.attributes.push(pso::AttributeDesc {
+                    location: 0,
+                    binding: 0,
+                    element: pso::Element {
+                        format: f::Format::Rg32Sfloat,
+                        offset: 0,
+                    },
+                });
+                pipeline_desc.attributes.push(pso::AttributeDesc {
+                    location: 1,
+                    binding: 0,
+                    element: pso::Element {
+                        format: f::Format::Rg32Sfloat,
+                        offset: 8,
+                    },
+                });
+
+                device.create_graphics_pipeline(&pipeline_desc, None)
+            };
+
+            device.destroy_shader_module(vs_module);
+            device.destroy_shader_module(fs_module);
+
+            pipeline.unwrap()
+        };
+        PipelineState {
+            pipeline: Some(pipeline),
+            pipeline_layout: Some(pipeline_layout),
+            device: Rc::clone(&device_ptr),
+        }
+    }
+
     unsafe fn new<IS>(
         desc_layouts: IS,
         render_pass: &B::RenderPass,
@@ -1273,20 +1542,16 @@ impl<B: Backend> PipelineState<B> {
             .expect("Can't create pipeline layout");
 
         let pipeline = {
-            let vs_module = {
-                let glsl = fs::read_to_string("src/data/quad.vert").unwrap();
-                let file =
-                    glsl_to_spirv::compile(&glsl, glsl_to_spirv::ShaderType::Vertex).unwrap();
-                let spirv: Vec<u32> = hal::read_spirv(file).unwrap();
-                device.create_shader_module(&spirv).unwrap()
-            };
-            let fs_module = {
-                let glsl = fs::read_to_string("src/data/quad.frag").unwrap();
-                let file =
-                    glsl_to_spirv::compile(&glsl, glsl_to_spirv::ShaderType::Fragment).unwrap();
-                let spirv: Vec<u32> = hal::read_spirv(file).unwrap();
-                device.create_shader_module(&spirv).unwrap()
-            };
+            let vs_module = read_shader_file::<B>(
+                device,
+                "src/data/quad.vert",
+                glsl_to_spirv::ShaderType::Vertex,
+            );
+            let fs_module = read_shader_file::<B>(
+                device,
+                "src/data/quad.frag",
+                glsl_to_spirv::ShaderType::Fragment,
+            );
 
             let pipeline = {
                 let (vs_entry, fs_entry) = (
