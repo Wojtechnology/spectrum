@@ -46,9 +46,11 @@ const DIMS: Extent2D = Extent2D {
     height: 768,
 };
 
-pub type Triangle = [[f32; 2]; 3];
-
-const TRIANGLE: Triangle = [[-0.5, 0.5], [-0.5, -0.5], [0.5, -0.33]];
+const TRIANGLE: [[f32; 5]; 3] = [
+    [-0.5, 0.5, 1.0, 0.0, 0.0],
+    [-0.5, -0.5, 0.0, 1.0, 0.0],
+    [0.5, -0.33, 0.0, 0.0, 1.0],
+];
 
 #[derive(Debug, Clone, Copy)]
 struct Vertex {
@@ -108,6 +110,7 @@ struct RendererState<B: Backend> {
     framebuffer: FramebufferState<B>,
     viewport: pso::Viewport,
     image: ImageState<B>,
+    creation_instant: std::time::Instant,
 }
 
 #[derive(Debug)]
@@ -216,7 +219,7 @@ impl<B: Backend> RendererState<B> {
             &mut staging_pool,
         );
 
-        let triangle_vertex_buffer = BufferState::new::<[f32; 2]>(
+        let triangle_vertex_buffer = BufferState::new::<[f32; 5]>(
             Rc::clone(&device),
             &TRIANGLE,
             buffer::Usage::VERTEX,
@@ -278,6 +281,7 @@ impl<B: Backend> RendererState<B> {
             swapchain,
             framebuffer,
             viewport,
+            creation_instant: std::time::Instant::now(),
         }
     }
 
@@ -308,14 +312,6 @@ impl<B: Backend> RendererState<B> {
                 Rc::clone(&self.device),
             )
         };
-
-        // self.pipeline = unsafe {
-        //     PipelineState::new(
-        //         vec![self.image.get_layout(), self.uniform.get_layout()],
-        //         self.render_pass.render_pass.as_ref().unwrap(),
-        //         Rc::clone(&self.device),
-        //     )
-        // };
 
         self.viewport = Self::create_viewport(self.swapchain.as_ref().unwrap());
     }
@@ -362,6 +358,9 @@ impl<B: Backend> RendererState<B> {
             }?
         };
 
+        let duration = std::time::Instant::now().duration_since(self.creation_instant);
+        let time_f32 = duration.as_secs() as f32 + duration.subsec_nanos() as f32 * 1e-9;
+
         let (fid, sid) = self
             .framebuffer
             .get_frame_data(Some(frame as usize), Some(sem_index));
@@ -381,9 +380,6 @@ impl<B: Backend> RendererState<B> {
                 .unwrap();
             command_pool.reset(false);
 
-            let triangle = [[-0.5, 0.5], [-0.5, -0.5], [x, y]];
-            self.triangle_vertex_buffer.update_data(0, &triangle);
-
             // Rendering
             let mut cmd_buffer = match command_buffers.pop() {
                 Some(cmd_buffer) => cmd_buffer,
@@ -394,6 +390,12 @@ impl<B: Backend> RendererState<B> {
             cmd_buffer.set_scissors(0, &[self.viewport.rect]);
             cmd_buffer.bind_graphics_pipeline(self.pipeline.pipeline.as_ref().unwrap());
             cmd_buffer.bind_vertex_buffers(0, Some((self.triangle_vertex_buffer.get_buffer(), 0)));
+            cmd_buffer.push_graphics_constants(
+                self.pipeline.pipeline_layout.as_ref().unwrap(),
+                ShaderStageFlags::FRAGMENT,
+                0,
+                &[time_f32.to_bits()],
+            );
             cmd_buffer.bind_graphics_descriptor_sets(
                 self.pipeline.pipeline_layout.as_ref().unwrap(),
                 0,
@@ -413,7 +415,7 @@ impl<B: Backend> RendererState<B> {
                         cr, cg, cb, 1.0,
                     ]))],
                 );
-                encoder.draw(0..6, 0..1);
+                encoder.draw(0..3, 0..1);
             }
             cmd_buffer.finish();
 
@@ -702,7 +704,6 @@ impl<B: Backend> RendererState<B> {
                             winit::WindowEvent::CursorMoved { position, .. } => {
                                 x = (position.x as f32) / (viewport.rect.w as f32) * 4.0 - 1.0;
                                 y = (position.y as f32) / (viewport.rect.h as f32) * 4.0 - 1.0;
-                                println!("Mouse moved to {}, {}", x, y);
                             }
                             _ => (),
                         }
@@ -1434,7 +1435,7 @@ impl<B: Backend> PipelineState<B> {
         IS::Item: std::borrow::Borrow<B::DescriptorSetLayout>,
     {
         let device = &device_ptr.borrow().device;
-        let push_constants = Vec::<(ShaderStageFlags, core::ops::Range<u32>)>::new();
+        let push_constants = vec![(ShaderStageFlags::FRAGMENT, 0..1)];
         let pipeline_layout = device
             .create_pipeline_layout(desc_layouts, push_constants)
             .expect("Can't create pipeline layout");
@@ -1491,7 +1492,7 @@ impl<B: Backend> PipelineState<B> {
                 });
                 pipeline_desc.vertex_buffers.push(pso::VertexBufferDesc {
                     binding: 0,
-                    stride: size_of::<[f32; 2]>() as u32,
+                    stride: size_of::<[f32; 5]>() as u32,
                     rate: VertexInputRate::Vertex,
                 });
 
@@ -1507,8 +1508,8 @@ impl<B: Backend> PipelineState<B> {
                     location: 1,
                     binding: 0,
                     element: pso::Element {
-                        format: f::Format::Rg32Sfloat,
-                        offset: 8,
+                        format: f::Format::Rgb32Sfloat,
+                        offset: size_of::<[f32; 2]>() as u32,
                     },
                 });
 
