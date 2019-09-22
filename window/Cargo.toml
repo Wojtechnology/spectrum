@@ -12,21 +12,23 @@ vulkan = ["gfx-backend-vulkan"]
 [dependencies]
 image = "0.21"
 log = "0.4"
-winit = "0.19"
+winit = "0.20.0-alpha3"
 arrayvec = "0.4"
 glsl-to-spirv = "0.1.4"
-gfx-hal = "0.3"
+gfx-hal = { path = "../../gfx/src/hal", version = "0.3", package = "gfx-hal" }
 gfx-backend-empty = "0.3"
 
 [target.'cfg(debug_assertions)'.dependencies]
 env_logger = "0.6"
 
 [dependencies.gfx-backend-vulkan]
+path = "../../gfx/src/backend/vulkan"
 version = "0.3"
 features = ["winit", "x11"]
 optional = true
 
 [target.'cfg(target_os = "macos")'.dependencies.gfx-backend-metal]
+path = "../../gfx/src/backend/metal"
 version = "0.3"
 features = ["winit"]
 optional = true

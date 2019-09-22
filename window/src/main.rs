@@ -30,18 +30,27 @@ use std::rc::Rc;
 use std::{fs, iter};
 
 use hal::{
-    buffer, command, format as f, image as i, memory as m, pass, pool, pso, window::Extent2D,
-    Adapter, Backend, DescriptorPool, Device, Instance, Limits, MemoryType, PhysicalDevice,
-    Primitive, QueueGroup, Surface, Swapchain, SwapchainConfig,
+    adapter::{Adapter, MemoryType},
+    buffer,
+    command,
+    format::{self as f, AsFormat},
+    image as i,
+    memory as m,
+    pass,
+    pool,
+    prelude::*,
+    pso,
+    queue::{QueueGroup, Submission},
+    window as w,
+    Backend,
 };
 
-use hal::format::{AsFormat, ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
+use hal::format::{ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
 use hal::pass::Subpass;
 use hal::pso::{PipelineStage, ShaderStageFlags, VertexInputRate};
-use hal::queue::Submission;
 
 const ENTRY_NAME: &str = "main";
-const DIMS: Extent2D = Extent2D {
+const DIMS: w::Extent2D = w::Extent2D {
     width: 1024,
     height: 768,
 };
@@ -85,6 +94,38 @@ const QUAD: [Vertex; 6] = [
     },
 ];
 
+#[derive(Debug, Clone, Copy)]
+pub struct Quad {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Quad {
+    pub fn vertex_attributes(self) -> [f32; 4 * (2 + 3 + 2)] {
+        let x = self.x;
+        let y = self.y;
+        let w = self.w;
+        let h = self.h;
+        #[cfg_attr(rustfmt, rustfmt_skip)]
+        [
+        // X    Y    R    G    B                  U    V
+        x  , y+h, 1.0, 0.0, 0.0, /* red     */ 0.0, 1.0, /* bottom left */
+        x  , y  , 0.0, 1.0, 0.0, /* green   */ 0.0, 0.0, /* top left */
+        x+w, y  , 0.0, 0.0, 1.0, /* blue    */ 1.0, 0.0, /* top right */
+        x+w, y+h, 1.0, 0.0, 1.0, /* magenta */ 1.0, 1.0, /* bottom right */
+        ]
+    }
+}
+
+const ACTUAL_QUAD: Quad = Quad {
+    x: 0.0,
+    y: 0.0,
+    w: 1.0,
+    h: 1.0,
+};
+
 const COLOR_RANGE: i::SubresourceRange = i::SubresourceRange {
     aspects: f::Aspects::COLOR,
     levels: 0..1,
@@ -104,6 +145,7 @@ struct RendererState<B: Backend> {
     window: WindowState,
     vertex_buffer: BufferState<B>,
     triangle_vertex_buffer: BufferState<B>,
+    quad_vertex_buffer: BufferState<B>,
     render_pass: RenderPassState<B>,
     uniform: Uniform<B>,
     pipeline: PipelineState<B>,
@@ -204,19 +246,26 @@ impl<B: Backend> RendererState<B> {
         let mut staging_pool = device
             .borrow()
             .device
-            .create_command_pool_typed(
+            .create_command_pool(
                 &device.borrow().queues,
                 pool::CommandPoolCreateFlags::empty(),
             )
             .expect("Can't create staging command pool");
 
-        let image = ImageState::new::<hal::Graphics>(
+        let image = ImageState::new(
             image_desc,
             &img,
             &backend.adapter,
             buffer::Usage::TRANSFER_SRC,
             &mut device.borrow_mut(),
             &mut staging_pool,
+        );
+
+        let quad_vertex_buffer = BufferState::new::<f32>(
+            Rc::clone(&device),
+            &ACTUAL_QUAD.vertex_attributes(),
+            buffer::Usage::VERTEX,
+            &backend.adapter.memory_types,
         );
 
         let triangle_vertex_buffer = BufferState::new::<[f32; 5]>(
@@ -246,7 +295,7 @@ impl<B: Backend> RendererState<B> {
         device
             .borrow()
             .device
-            .destroy_command_pool(staging_pool.into_raw());
+            .destroy_command_pool(staging_pool);
 
         let mut swapchain = Some(SwapchainState::new(&mut backend, Rc::clone(&device)));
 
@@ -275,6 +324,7 @@ impl<B: Backend> RendererState<B> {
             uniform_desc_pool,
             vertex_buffer,
             triangle_vertex_buffer,
+            quad_vertex_buffer,
             uniform,
             render_pass,
             pipeline,
@@ -338,7 +388,7 @@ impl<B: Backend> RendererState<B> {
     ) -> Result<(), &'static str> {
         let sem_index = self.framebuffer.next_acq_pre_pair_index();
 
-        let frame: hal::SwapImageIndex = unsafe {
+        let frame: w::SwapImageIndex = unsafe {
             let (acquire_semaphore, _) = self
                 .framebuffer
                 .get_frame_data(None, Some(sem_index))
@@ -383,7 +433,7 @@ impl<B: Backend> RendererState<B> {
             // Rendering
             let mut cmd_buffer = match command_buffers.pop() {
                 Some(cmd_buffer) => cmd_buffer,
-                None => command_pool.acquire_command_buffer(),
+                None => command_pool.allocate_one(command::Level::Primary),
             };
             cmd_buffer.begin();
             cmd_buffer.set_viewports(0, &[self.viewport.clone()]);
@@ -450,7 +500,7 @@ impl<B: Backend> RendererState<B> {
     fn draw_rust_logo(&mut self, cr: f32, cg: f32, cb: f32) -> Result<(), &'static str> {
         let sem_index = self.framebuffer.next_acq_pre_pair_index();
 
-        let frame: hal::SwapImageIndex = unsafe {
+        let frame: w::SwapImageIndex = unsafe {
             let (acquire_semaphore, _) = self
                 .framebuffer
                 .get_frame_data(None, Some(sem_index))
@@ -493,7 +543,7 @@ impl<B: Backend> RendererState<B> {
             // Rendering
             let mut cmd_buffer = match command_buffers.pop() {
                 Some(cmd_buffer) => cmd_buffer,
-                None => command_pool.acquire_command_buffer(),
+                None => command_pool.allocate_one(command::Level::Primary),
             };
             cmd_buffer.begin();
 
@@ -556,173 +606,6 @@ impl<B: Backend> RendererState<B> {
     where
         B::Surface: SurfaceTrait,
     {
-        let mut running = true;
-        let mut recreate_swapchain = false;
-
-        let mut r = 1.0f32;
-        let mut g = 1.0f32;
-        let mut b = 1.0f32;
-        let mut a = 1.0f32;
-
-        let mut cr = 0.8;
-        let mut cg = 0.8;
-        let mut cb = 0.8;
-
-        let mut x = 0.5;
-        let mut y = 0.5;
-
-        let mut cur_color = Color::Red;
-        let mut cur_value: u32 = 0;
-
-        println!("\nInstructions:");
-        println!("\tChoose whether to change the (R)ed, (G)reen or (B)lue color by pressing the appropriate key.");
-        println!("\tType in the value you want to change it to, where 0 is nothing, 255 is normal and 510 is double, ect.");
-        println!("\tThen press C to change the (C)lear colour or (Enter) for the image color.");
-        println!(
-            "\tSet {:?} color to: {} (press enter/C to confirm)",
-            cur_color, cur_value
-        );
-
-        while running {
-            {
-                let uniform = &mut self.uniform;
-                let viewport = &mut self.viewport;
-
-                self.window.events_loop.poll_events(|event| {
-                    if let winit::Event::WindowEvent { event, .. } = event {
-                        #[allow(unused_variables)]
-                        match event {
-                            winit::WindowEvent::KeyboardInput {
-                                input:
-                                    winit::KeyboardInput {
-                                        virtual_keycode: Some(winit::VirtualKeyCode::Escape),
-                                        ..
-                                    },
-                                ..
-                            }
-                            | winit::WindowEvent::CloseRequested => running = false,
-                            winit::WindowEvent::Resized(dims) => {
-                                recreate_swapchain = true;
-                            }
-                            winit::WindowEvent::KeyboardInput {
-                                input:
-                                    winit::KeyboardInput {
-                                        virtual_keycode,
-                                        state: winit::ElementState::Pressed,
-                                        ..
-                                    },
-                                ..
-                            } => {
-                                if let Some(kc) = virtual_keycode {
-                                    match kc {
-                                        winit::VirtualKeyCode::Key0 => {
-                                            cur_value = cur_value * 10 + 0
-                                        }
-                                        winit::VirtualKeyCode::Key1 => {
-                                            cur_value = cur_value * 10 + 1
-                                        }
-                                        winit::VirtualKeyCode::Key2 => {
-                                            cur_value = cur_value * 10 + 2
-                                        }
-                                        winit::VirtualKeyCode::Key3 => {
-                                            cur_value = cur_value * 10 + 3
-                                        }
-                                        winit::VirtualKeyCode::Key4 => {
-                                            cur_value = cur_value * 10 + 4
-                                        }
-                                        winit::VirtualKeyCode::Key5 => {
-                                            cur_value = cur_value * 10 + 5
-                                        }
-                                        winit::VirtualKeyCode::Key6 => {
-                                            cur_value = cur_value * 10 + 6
-                                        }
-                                        winit::VirtualKeyCode::Key7 => {
-                                            cur_value = cur_value * 10 + 7
-                                        }
-                                        winit::VirtualKeyCode::Key8 => {
-                                            cur_value = cur_value * 10 + 8
-                                        }
-                                        winit::VirtualKeyCode::Key9 => {
-                                            cur_value = cur_value * 10 + 9
-                                        }
-                                        winit::VirtualKeyCode::R => {
-                                            cur_value = 0;
-                                            cur_color = Color::Red
-                                        }
-                                        winit::VirtualKeyCode::G => {
-                                            cur_value = 0;
-                                            cur_color = Color::Green
-                                        }
-                                        winit::VirtualKeyCode::B => {
-                                            cur_value = 0;
-                                            cur_color = Color::Blue
-                                        }
-                                        winit::VirtualKeyCode::A => {
-                                            cur_value = 0;
-                                            cur_color = Color::Alpha
-                                        }
-                                        winit::VirtualKeyCode::Return => {
-                                            match cur_color {
-                                                Color::Red => r = cur_value as f32 / 255.0,
-                                                Color::Green => g = cur_value as f32 / 255.0,
-                                                Color::Blue => b = cur_value as f32 / 255.0,
-                                                Color::Alpha => a = cur_value as f32 / 255.0,
-                                            }
-                                            uniform
-                                                .buffer
-                                                .as_mut()
-                                                .unwrap()
-                                                .update_data(0, &[r, g, b, a]);
-                                            cur_value = 0;
-
-                                            println!("Colour updated!");
-                                        }
-                                        winit::VirtualKeyCode::C => {
-                                            match cur_color {
-                                                Color::Red => cr = cur_value as f32 / 255.0,
-                                                Color::Green => cg = cur_value as f32 / 255.0,
-                                                Color::Blue => cb = cur_value as f32 / 255.0,
-                                                Color::Alpha => {
-                                                    error!(
-                                                        "Alpha is not valid for the background."
-                                                    );
-                                                    return;
-                                                }
-                                            }
-                                            cur_value = 0;
-
-                                            println!("Background color updated!");
-                                        }
-                                        _ => return,
-                                    }
-                                    println!(
-                                        "Set {:?} color to: {} (press enter/C to confirm)",
-                                        cur_color, cur_value
-                                    )
-                                }
-                            }
-                            winit::WindowEvent::CursorMoved { position, .. } => {
-                                x = (position.x as f32) / (viewport.rect.w as f32) * 4.0 - 1.0;
-                                y = (position.y as f32) / (viewport.rect.h as f32) * 4.0 - 1.0;
-                            }
-                            _ => (),
-                        }
-                    }
-                });
-            }
-
-            if recreate_swapchain {
-                self.recreate_swapchain();
-                recreate_swapchain = false;
-            }
-
-            match self.draw_triangle(cr, cg, cb, x, y) {
-                Ok(()) => (),
-                Err(_) => {
-                    recreate_swapchain = true;
-                }
-            };
-        }
     }
 }
 
@@ -744,17 +627,17 @@ impl<B: Backend> Drop for RendererState<B> {
 }
 
 struct WindowState {
-    events_loop: winit::EventsLoop,
-    wb: Option<winit::WindowBuilder>,
+    events_loop: winit::event_loop::EventLoop<()>,
+    wb: Option<winit::window::WindowBuilder>,
 }
 
 impl WindowState {
     fn new() -> WindowState {
-        let events_loop = winit::EventsLoop::new();
+        let events_loop = winit::event_loop::EventLoop::new();
 
-        let wb = winit::WindowBuilder::new()
-            .with_min_dimensions(winit::dpi::LogicalSize::new(1.0, 1.0))
-            .with_dimensions(winit::dpi::LogicalSize::new(
+        let wb = winit::window::WindowBuilder::new()
+            .with_min_inner_size(winit::dpi::LogicalSize::new(1.0, 1.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(
                 DIMS.width as _,
                 DIMS.height as _,
             ))
@@ -770,7 +653,7 @@ impl WindowState {
 struct BackendState<B: Backend> {
     surface: B::Surface,
     adapter: AdapterState<B>,
-    window: winit::Window,
+    window: winit::window::Window,
 }
 
 #[cfg(any(feature = "vulkan", feature = "metal"))]
@@ -797,7 +680,7 @@ fn create_backend(window_state: &mut WindowState) -> (BackendState<back::Backend
 struct AdapterState<B: Backend> {
     adapter: Option<Adapter<B>>,
     memory_types: Vec<MemoryType>,
-    limits: Limits,
+    limits: hal::Limits,
 }
 
 impl<B: Backend> AdapterState<B> {
@@ -827,13 +710,13 @@ impl<B: Backend> AdapterState<B> {
 struct DeviceState<B: Backend> {
     device: B::Device,
     physical_device: B::PhysicalDevice,
-    queues: QueueGroup<B, hal::Graphics>,
+    queues: QueueGroup<B>,
 }
 
 impl<B: Backend> DeviceState<B> {
     fn new(adapter: Adapter<B>, surface: &B::Surface) -> Self {
         let (device, queues) = adapter
-            .open_with::<_, hal::Graphics>(1, |family| surface.supports_queue_family(family))
+            .open_with::<_>(1, |family| surface.supports_queue_family(family))
             .unwrap();
 
         DeviceState {
@@ -1212,13 +1095,13 @@ struct ImageState<B: Backend> {
 }
 
 impl<B: Backend> ImageState<B> {
-    unsafe fn new<T: hal::Supports<hal::Transfer>>(
+    unsafe fn new(
         mut desc: DescSet<B>,
         img: &::image::ImageBuffer<::image::Rgba<u8>, Vec<u8>>,
         adapter: &AdapterState<B>,
         usage: buffer::Usage,
         device_state: &mut DeviceState<B>,
-        staging_pool: &mut hal::CommandPool<B, hal::Graphics>,
+        staging_pool: &mut B::CommandPool,
     ) -> Self {
         let (buffer, dims, row_pitch, stride) = BufferState::new_texture(
             Rc::clone(&desc.layout.device),
@@ -1295,7 +1178,7 @@ impl<B: Backend> ImageState<B> {
 
         // copy buffer to texture
         {
-            let mut cmd_buffer = staging_pool.acquire_command_buffer::<command::OneShot>();
+            let mut cmd_buffer = staging_pool.allocate_one();
             cmd_buffer.begin();
 
             let image_barrier = m::Barrier::Image {
@@ -1405,7 +1288,7 @@ unsafe fn read_shader_str<B: Backend>(
     shader_type: glsl_to_spirv::ShaderType,
 ) -> B::ShaderModule {
     let file = glsl_to_spirv::compile(shader_str, shader_type).unwrap();
-    let spirv: Vec<u32> = hal::read_spirv(file).unwrap();
+    let spirv: Vec<u32> = pso::read_spirv(file).unwrap();
     device.create_shader_module(&spirv).unwrap()
 }
 
@@ -1481,7 +1364,7 @@ impl<B: Backend> PipelineState<B> {
 
                 let mut pipeline_desc = pso::GraphicsPipelineDesc::new(
                     shader_entries,
-                    Primitive::TriangleList,
+                    hal::Primitive::TriangleList,
                     pso::Rasterizer::FILL,
                     &pipeline_layout,
                     subpass,
@@ -1583,7 +1466,7 @@ impl<B: Backend> PipelineState<B> {
 
                 let mut pipeline_desc = pso::GraphicsPipelineDesc::new(
                     shader_entries,
-                    Primitive::TriangleList,
+                    hal::Primitive::TriangleList,
                     pso::Rasterizer::FILL,
                     &pipeline_layout,
                     subpass,
@@ -1665,7 +1548,7 @@ impl<B: Backend> SwapchainState<B> {
         });
 
         println!("Surface format: {:?}", format);
-        let swap_config = SwapchainConfig::from_caps(&caps, format, DIMS);
+        let swap_config = w::SwapchainConfig::from_caps(&caps, format, DIMS);
         let extent = swap_config.extent.to_extent();
         let (swapchain, backbuffer) = device
             .borrow()
@@ -1698,8 +1581,8 @@ impl<B: Backend> Drop for SwapchainState<B> {
 struct FramebufferState<B: Backend> {
     framebuffers: Option<Vec<B::Framebuffer>>,
     framebuffer_fences: Option<Vec<B::Fence>>,
-    command_pools: Option<Vec<hal::CommandPool<B, hal::Graphics>>>,
-    command_buffer_lists: Vec<Vec<hal::command::CommandBuffer<B, hal::Graphics>>>,
+    command_pools: Option<Vec<B::CommandPool>>,
+    command_buffer_lists: Vec<Vec<B::CommandBuffer>>,
     frame_images: Option<Vec<(B::Image, B::ImageView)>>,
     acquire_semaphores: Option<Vec<B::Semaphore>>,
     present_semaphores: Option<Vec<B::Semaphore>>,
@@ -1763,7 +1646,7 @@ impl<B: Backend> FramebufferState<B> {
         };
 
         let mut fences: Vec<B::Fence> = vec![];
-        let mut command_pools: Vec<hal::CommandPool<B, hal::Graphics>> = vec![];
+        let mut command_pools: Vec<B::CommandPool> = vec![];
         let mut command_buffer_lists = Vec::new();
         let mut acquire_semaphores: Vec<B::Semaphore> = vec![];
         let mut present_semaphores: Vec<B::Semaphore> = vec![];
@@ -1774,7 +1657,7 @@ impl<B: Backend> FramebufferState<B> {
                 device
                     .borrow()
                     .device
-                    .create_command_pool_typed(
+                    .create_command_pool(
                         &device.borrow().queues,
                         pool::CommandPoolCreateFlags::empty(),
                     )
@@ -1817,8 +1700,8 @@ impl<B: Backend> FramebufferState<B> {
         Option<(
             &mut B::Fence,
             &mut B::Framebuffer,
-            &mut hal::CommandPool<B, hal::Graphics>,
-            &mut Vec<hal::command::CommandBuffer<B, hal::Graphics>>,
+            &mut B::CommandPool,
+            &mut Vec<B::CommandBuffer>,
         )>,
         Option<(&mut B::Semaphore, &mut B::Semaphore)>,
     ) {
@@ -1863,7 +1746,7 @@ impl<B: Backend> Drop for FramebufferState<B> {
                 .zip(self.command_buffer_lists.drain(..))
             {
                 command_pool.free(comamnd_buffer_list);
-                device.destroy_command_pool(command_pool.into_raw());
+                device.destroy_command_pool(command_pool);
             }
 
             for acquire_semaphore in self.acquire_semaphores.take().unwrap() {
@@ -1893,7 +1776,172 @@ fn main() {
     let (backend, _instance) = create_backend(&mut window);
 
     let mut renderer_state = unsafe { RendererState::new(backend, window) };
-    renderer_state.mainloop();
+    let mut recreate_swapchain = false;
+
+    let mut r = 1.0f32;
+    let mut g = 1.0f32;
+    let mut b = 1.0f32;
+    let mut a = 1.0f32;
+
+    let mut cr = 0.8;
+    let mut cg = 0.8;
+    let mut cb = 0.8;
+
+    let mut x = 0.5;
+    let mut y = 0.5;
+
+    let mut cur_color = Color::Red;
+    let mut cur_value: u32 = 0;
+
+    println!("\nInstructions:");
+    println!("\tChoose whether to change the (R)ed, (G)reen or (B)lue color by pressing the appropriate key.");
+    println!("\tType in the value you want to change it to, where 0 is nothing, 255 is normal and 510 is double, ect.");
+    println!("\tThen press C to change the (C)lear colour or (Enter) for the image color.");
+    println!(
+        "\tSet {:?} color to: {} (press enter/C to confirm)",
+        cur_color, cur_value
+    );
+
+    renderer_state
+        .window
+        .events_loop
+        .run(move |event, _, control_flow| {
+            *control_flow = winit::event_loop::ControlFlow::Exit;
+            let uniform = &mut renderer_state.uniform;
+            let viewport = &mut renderer_state.viewport;
+            if let winit::event::Event::WindowEvent { event, .. } = event {
+                #[allow(unused_variables)]
+                match event {
+                    winit::event::WindowEvent::KeyboardInput {
+                        input:
+                            winit::event::KeyboardInput {
+                                virtual_keycode: Some(winit::event::VirtualKeyCode::Escape),
+                                ..
+                            },
+                        ..
+                    }
+                    | winit::event::WindowEvent::CloseRequested => {
+                        *control_flow = winit::event_loop::ControlFlow::Exit
+                    }
+                    winit::event::WindowEvent::Resized(dims) => {
+                        recreate_swapchain = true;
+                    }
+                    winit::event::WindowEvent::RedrawRequested => {
+                        if recreate_swapchain {
+                            renderer_state.recreate_swapchain();
+                            recreate_swapchain = false;
+                        }
+
+                        match renderer_state.draw_triangle(cr, cg, cb, x, y) {
+                            Ok(()) => (),
+                            Err(_) => {
+                                recreate_swapchain = true;
+                            }
+                        }
+                    }
+                    winit::event::WindowEvent::KeyboardInput {
+                        input:
+                            winit::event::KeyboardInput {
+                                virtual_keycode,
+                                state: winit::event::ElementState::Pressed,
+                                ..
+                            },
+                        ..
+                    } => {
+                        if let Some(kc) = virtual_keycode {
+                            match kc {
+                                winit::event::VirtualKeyCode::Key0 => {
+                                    cur_value = cur_value * 10 + 0
+                                }
+                                winit::event::VirtualKeyCode::Key1 => {
+                                    cur_value = cur_value * 10 + 1
+                                }
+                                winit::event::VirtualKeyCode::Key2 => {
+                                    cur_value = cur_value * 10 + 2
+                                }
+                                winit::event::VirtualKeyCode::Key3 => {
+                                    cur_value = cur_value * 10 + 3
+                                }
+                                winit::event::VirtualKeyCode::Key4 => {
+                                    cur_value = cur_value * 10 + 4
+                                }
+                                winit::event::VirtualKeyCode::Key5 => {
+                                    cur_value = cur_value * 10 + 5
+                                }
+                                winit::event::VirtualKeyCode::Key6 => {
+                                    cur_value = cur_value * 10 + 6
+                                }
+                                winit::event::VirtualKeyCode::Key7 => {
+                                    cur_value = cur_value * 10 + 7
+                                }
+                                winit::event::VirtualKeyCode::Key8 => {
+                                    cur_value = cur_value * 10 + 8
+                                }
+                                winit::event::VirtualKeyCode::Key9 => {
+                                    cur_value = cur_value * 10 + 9
+                                }
+                                winit::event::VirtualKeyCode::R => {
+                                    cur_value = 0;
+                                    cur_color = Color::Red
+                                }
+                                winit::event::VirtualKeyCode::G => {
+                                    cur_value = 0;
+                                    cur_color = Color::Green
+                                }
+                                winit::event::VirtualKeyCode::B => {
+                                    cur_value = 0;
+                                    cur_color = Color::Blue
+                                }
+                                winit::event::VirtualKeyCode::A => {
+                                    cur_value = 0;
+                                    cur_color = Color::Alpha
+                                }
+                                winit::event::VirtualKeyCode::Return => {
+                                    match cur_color {
+                                        Color::Red => r = cur_value as f32 / 255.0,
+                                        Color::Green => g = cur_value as f32 / 255.0,
+                                        Color::Blue => b = cur_value as f32 / 255.0,
+                                        Color::Alpha => a = cur_value as f32 / 255.0,
+                                    }
+                                    uniform
+                                        .buffer
+                                        .as_mut()
+                                        .unwrap()
+                                        .update_data(0, &[r, g, b, a]);
+                                    cur_value = 0;
+
+                                    println!("Colour updated!");
+                                }
+                                winit::event::VirtualKeyCode::C => {
+                                    match cur_color {
+                                        Color::Red => cr = cur_value as f32 / 255.0,
+                                        Color::Green => cg = cur_value as f32 / 255.0,
+                                        Color::Blue => cb = cur_value as f32 / 255.0,
+                                        Color::Alpha => {
+                                            error!("Alpha is not valid for the background.");
+                                            return;
+                                        }
+                                    }
+                                    cur_value = 0;
+
+                                    println!("Background color updated!");
+                                }
+                                _ => return,
+                            }
+                            println!(
+                                "Set {:?} color to: {} (press enter/C to confirm)",
+                                cur_color, cur_value
+                            )
+                        }
+                    }
+                    winit::event::WindowEvent::CursorMoved { position, .. } => {
+                        x = (position.x as f32) / (viewport.rect.w as f32) * 4.0 - 1.0;
+                        y = (position.y as f32) / (viewport.rect.h as f32) * 4.0 - 1.0;
+                    }
+                    _ => (),
+                }
+            };
+        });
 }
 
 #[cfg(not(any(feature = "vulkan", feature = "metal",)))]
