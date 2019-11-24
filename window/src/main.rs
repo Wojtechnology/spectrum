@@ -27,6 +27,7 @@ use std::cell::RefCell;
 use std::io::Cursor;
 use std::mem::{size_of, ManuallyDrop};
 use std::rc::Rc;
+use std::time::Instant;
 use std::{fs, iter, ptr};
 
 use hal::{
@@ -298,7 +299,7 @@ impl<B: Backend> RendererState<B> {
             swapchain.as_mut().unwrap(),
         );
 
-        let pipeline = PipelineState::new(
+        let pipeline = PipelineState::new_triangle(
             vec![image.get_layout(), uniform.get_layout()],
             render_pass.render_pass.as_ref().unwrap(),
             Rc::clone(&device),
@@ -346,7 +347,7 @@ impl<B: Backend> RendererState<B> {
         };
 
         self.pipeline = unsafe {
-            PipelineState::new(
+            PipelineState::new_triangle(
                 vec![self.image.get_layout(), self.uniform.get_layout()],
                 self.render_pass.render_pass.as_ref().unwrap(),
                 Rc::clone(&self.device),
@@ -1290,7 +1291,7 @@ impl<B: Backend> PipelineState<B> {
         IS::Item: std::borrow::Borrow<B::DescriptorSetLayout>,
     {
         let device = &device_ptr.borrow().device;
-        let push_constants = vec![(ShaderStageFlags::FRAGMENT, 0..1)];
+        let push_constants = vec![(ShaderStageFlags::FRAGMENT, 0..4)];
         let pipeline_layout = device
             .create_pipeline_layout(desc_layouts, push_constants)
             .expect("Can't create pipeline layout");
@@ -1783,128 +1784,162 @@ fn main() {
         "\tSet {:?} color to: {} (press enter/C to confirm)",
         cur_color, cur_value
     );
-    match renderer_state.draw_rust_logo(cr, cg, cb) {
+
+    match renderer_state.draw_triangle(cr, cg, cb, x, y) {
         Ok(()) => (),
         Err(_) => {
             recreate_swapchain = true;
         }
     }
 
+    let mut frame_num: u64 = 0;
+
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = winit::event_loop::ControlFlow::Wait;
+        *control_flow = winit::event_loop::ControlFlow::Poll;
         let uniform = &mut renderer_state.uniform;
         let viewport = &mut renderer_state.viewport;
-        if let winit::event::Event::WindowEvent { event, .. } = event {
-            #[allow(unused_variables)]
-            match event {
-                winit::event::WindowEvent::KeyboardInput {
-                    input:
-                        winit::event::KeyboardInput {
-                            virtual_keycode: Some(winit::event::VirtualKeyCode::Escape),
-                            ..
-                        },
-                    ..
-                }
-                | winit::event::WindowEvent::CloseRequested => {
-                    *control_flow = winit::event_loop::ControlFlow::Exit
-                }
-                winit::event::WindowEvent::Resized(dims) => {
-                    recreate_swapchain = true;
-                }
-                winit::event::WindowEvent::RedrawRequested => {
-                    if recreate_swapchain {
-                        renderer_state.recreate_swapchain();
-                        recreate_swapchain = false;
+        match event {
+            winit::event::Event::WindowEvent { event, .. } =>
+            {
+                #[allow(unused_variables)]
+                match event {
+                    winit::event::WindowEvent::KeyboardInput {
+                        input:
+                            winit::event::KeyboardInput {
+                                virtual_keycode: Some(winit::event::VirtualKeyCode::Escape),
+                                ..
+                            },
+                        ..
                     }
+                    | winit::event::WindowEvent::CloseRequested => {
+                        *control_flow = winit::event_loop::ControlFlow::Exit
+                    }
+                    winit::event::WindowEvent::Resized(dims) => {
+                        recreate_swapchain = true;
+                    }
+                    winit::event::WindowEvent::RedrawRequested => {
+                        if recreate_swapchain {
+                            renderer_state.recreate_swapchain();
+                            recreate_swapchain = false;
+                        }
 
-                    match renderer_state.draw_rust_logo(cr, cg, cb) {
-                        Ok(()) => (),
-                        Err(_) => {
-                            recreate_swapchain = true;
+                        frame_num += 1;
+                        println!("Frame num {} rendering!", frame_num);
+                        match renderer_state.draw_triangle(cr, cg, cb, x, y) {
+                            Ok(()) => (),
+                            Err(e) => {
+                                println!("Error: {}, recreating swapchain", e);
+                                recreate_swapchain = true;
+                            }
                         }
                     }
-                }
-                winit::event::WindowEvent::KeyboardInput {
-                    input:
-                        winit::event::KeyboardInput {
-                            virtual_keycode,
-                            state: winit::event::ElementState::Pressed,
-                            ..
-                        },
-                    ..
-                } => {
-                    if let Some(kc) = virtual_keycode {
-                        match kc {
-                            winit::event::VirtualKeyCode::Key0 => cur_value = cur_value * 10 + 0,
-                            winit::event::VirtualKeyCode::Key1 => cur_value = cur_value * 10 + 1,
-                            winit::event::VirtualKeyCode::Key2 => cur_value = cur_value * 10 + 2,
-                            winit::event::VirtualKeyCode::Key3 => cur_value = cur_value * 10 + 3,
-                            winit::event::VirtualKeyCode::Key4 => cur_value = cur_value * 10 + 4,
-                            winit::event::VirtualKeyCode::Key5 => cur_value = cur_value * 10 + 5,
-                            winit::event::VirtualKeyCode::Key6 => cur_value = cur_value * 10 + 6,
-                            winit::event::VirtualKeyCode::Key7 => cur_value = cur_value * 10 + 7,
-                            winit::event::VirtualKeyCode::Key8 => cur_value = cur_value * 10 + 8,
-                            winit::event::VirtualKeyCode::Key9 => cur_value = cur_value * 10 + 9,
-                            winit::event::VirtualKeyCode::R => {
-                                cur_value = 0;
-                                cur_color = Color::Red
-                            }
-                            winit::event::VirtualKeyCode::G => {
-                                cur_value = 0;
-                                cur_color = Color::Green
-                            }
-                            winit::event::VirtualKeyCode::B => {
-                                cur_value = 0;
-                                cur_color = Color::Blue
-                            }
-                            winit::event::VirtualKeyCode::A => {
-                                cur_value = 0;
-                                cur_color = Color::Alpha
-                            }
-                            winit::event::VirtualKeyCode::Return => {
-                                match cur_color {
-                                    Color::Red => r = cur_value as f32 / 255.0,
-                                    Color::Green => g = cur_value as f32 / 255.0,
-                                    Color::Blue => b = cur_value as f32 / 255.0,
-                                    Color::Alpha => a = cur_value as f32 / 255.0,
+                    winit::event::WindowEvent::KeyboardInput {
+                        input:
+                            winit::event::KeyboardInput {
+                                virtual_keycode,
+                                state: winit::event::ElementState::Pressed,
+                                ..
+                            },
+                        ..
+                    } => {
+                        if let Some(kc) = virtual_keycode {
+                            match kc {
+                                winit::event::VirtualKeyCode::Key0 => {
+                                    cur_value = cur_value * 10 + 0
                                 }
-                                uniform
-                                    .buffer
-                                    .as_mut()
-                                    .unwrap()
-                                    .update_data(0, &[r, g, b, a]);
-                                cur_value = 0;
-
-                                println!("Colour updated!");
-                            }
-                            winit::event::VirtualKeyCode::C => {
-                                match cur_color {
-                                    Color::Red => cr = cur_value as f32 / 255.0,
-                                    Color::Green => cg = cur_value as f32 / 255.0,
-                                    Color::Blue => cb = cur_value as f32 / 255.0,
-                                    Color::Alpha => {
-                                        error!("Alpha is not valid for the background.");
-                                        return;
+                                winit::event::VirtualKeyCode::Key1 => {
+                                    cur_value = cur_value * 10 + 1
+                                }
+                                winit::event::VirtualKeyCode::Key2 => {
+                                    cur_value = cur_value * 10 + 2
+                                }
+                                winit::event::VirtualKeyCode::Key3 => {
+                                    cur_value = cur_value * 10 + 3
+                                }
+                                winit::event::VirtualKeyCode::Key4 => {
+                                    cur_value = cur_value * 10 + 4
+                                }
+                                winit::event::VirtualKeyCode::Key5 => {
+                                    cur_value = cur_value * 10 + 5
+                                }
+                                winit::event::VirtualKeyCode::Key6 => {
+                                    cur_value = cur_value * 10 + 6
+                                }
+                                winit::event::VirtualKeyCode::Key7 => {
+                                    cur_value = cur_value * 10 + 7
+                                }
+                                winit::event::VirtualKeyCode::Key8 => {
+                                    cur_value = cur_value * 10 + 8
+                                }
+                                winit::event::VirtualKeyCode::Key9 => {
+                                    cur_value = cur_value * 10 + 9
+                                }
+                                winit::event::VirtualKeyCode::R => {
+                                    cur_value = 0;
+                                    cur_color = Color::Red
+                                }
+                                winit::event::VirtualKeyCode::G => {
+                                    cur_value = 0;
+                                    cur_color = Color::Green
+                                }
+                                winit::event::VirtualKeyCode::B => {
+                                    cur_value = 0;
+                                    cur_color = Color::Blue
+                                }
+                                winit::event::VirtualKeyCode::A => {
+                                    cur_value = 0;
+                                    cur_color = Color::Alpha
+                                }
+                                winit::event::VirtualKeyCode::Return => {
+                                    match cur_color {
+                                        Color::Red => r = cur_value as f32 / 255.0,
+                                        Color::Green => g = cur_value as f32 / 255.0,
+                                        Color::Blue => b = cur_value as f32 / 255.0,
+                                        Color::Alpha => a = cur_value as f32 / 255.0,
                                     }
-                                }
-                                cur_value = 0;
+                                    uniform
+                                        .buffer
+                                        .as_mut()
+                                        .unwrap()
+                                        .update_data(0, &[r, g, b, a]);
+                                    cur_value = 0;
 
-                                println!("Background color updated!");
+                                    println!("Colour updated!");
+                                }
+                                winit::event::VirtualKeyCode::C => {
+                                    match cur_color {
+                                        Color::Red => cr = cur_value as f32 / 255.0,
+                                        Color::Green => cg = cur_value as f32 / 255.0,
+                                        Color::Blue => cb = cur_value as f32 / 255.0,
+                                        Color::Alpha => {
+                                            error!("Alpha is not valid for the background.");
+                                            return;
+                                        }
+                                    }
+                                    cur_value = 0;
+
+                                    println!("Background color updated!");
+                                }
+                                _ => return,
                             }
-                            _ => return,
+                            println!(
+                                "Set {:?} color to: {} (press enter/C to confirm)",
+                                cur_color, cur_value
+                            )
                         }
-                        println!(
-                            "Set {:?} color to: {} (press enter/C to confirm)",
-                            cur_color, cur_value
-                        )
                     }
+                    winit::event::WindowEvent::CursorMoved { position, .. } => {
+                        x = (position.x as f32) / (viewport.rect.w as f32) * 4.0 - 1.0;
+                        y = (position.y as f32) / (viewport.rect.h as f32) * 4.0 - 1.0;
+                    }
+                    _ => (),
                 }
-                winit::event::WindowEvent::CursorMoved { position, .. } => {
-                    x = (position.x as f32) / (viewport.rect.w as f32) * 4.0 - 1.0;
-                    y = (position.y as f32) / (viewport.rect.h as f32) * 4.0 - 1.0;
-                }
-                _ => (),
             }
+            winit::event::Event::EventsCleared => {
+                renderer_state.backend.window.request_redraw();
+                println!("EventsCleared");
+            }
+            _ => (),
         };
     });
 }
