@@ -25,24 +25,19 @@ struct Dimensions<T> {
 
 use std::cell::RefCell;
 use std::io::Cursor;
-use std::mem::size_of;
+use std::mem::{size_of, ManuallyDrop};
 use std::rc::Rc;
-use std::{fs, iter};
+use std::{fs, iter, ptr};
 
 use hal::{
     adapter::{Adapter, MemoryType},
-    buffer,
-    command,
+    buffer, command,
     format::{self as f, AsFormat},
-    image as i,
-    memory as m,
-    pass,
-    pool,
+    image as i, memory as m, pass, pool,
     prelude::*,
     pso,
     queue::{QueueGroup, Submission},
-    window as w,
-    Backend,
+    window as w, Backend,
 };
 
 use hal::format::{ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
@@ -142,7 +137,6 @@ struct RendererState<B: Backend> {
     swapchain: Option<SwapchainState<B>>,
     device: Rc<RefCell<DeviceState<B>>>,
     backend: BackendState<B>,
-    window: WindowState,
     vertex_buffer: BufferState<B>,
     triangle_vertex_buffer: BufferState<B>,
     quad_vertex_buffer: BufferState<B>,
@@ -164,7 +158,7 @@ enum Color {
 }
 
 impl<B: Backend> RendererState<B> {
-    unsafe fn new(mut backend: BackendState<B>, window: WindowState) -> Self {
+    unsafe fn new(mut backend: BackendState<B>) -> Self {
         let device = Rc::new(RefCell::new(DeviceState::new(
             backend.adapter.adapter.take().unwrap(),
             &backend.surface,
@@ -247,7 +241,7 @@ impl<B: Backend> RendererState<B> {
             .borrow()
             .device
             .create_command_pool(
-                &device.borrow().queues,
+                device.borrow().queues.family,
                 pool::CommandPoolCreateFlags::empty(),
             )
             .expect("Can't create staging command pool");
@@ -292,10 +286,7 @@ impl<B: Backend> RendererState<B> {
 
         image.wait_for_transfer_completion();
 
-        device
-            .borrow()
-            .device
-            .destroy_command_pool(staging_pool);
+        device.borrow().device.destroy_command_pool(staging_pool);
 
         let mut swapchain = Some(SwapchainState::new(&mut backend, Rc::clone(&device)));
 
@@ -307,7 +298,7 @@ impl<B: Backend> RendererState<B> {
             swapchain.as_mut().unwrap(),
         );
 
-        let pipeline = PipelineState::new_triangle(
+        let pipeline = PipelineState::new(
             vec![image.get_layout(), uniform.get_layout()],
             render_pass.render_pass.as_ref().unwrap(),
             Rc::clone(&device),
@@ -316,7 +307,6 @@ impl<B: Backend> RendererState<B> {
         let viewport = RendererState::create_viewport(swapchain.as_ref().unwrap());
 
         RendererState {
-            window,
             backend,
             device,
             image,
@@ -356,7 +346,7 @@ impl<B: Backend> RendererState<B> {
         };
 
         self.pipeline = unsafe {
-            PipelineState::new_triangle(
+            PipelineState::new(
                 vec![self.image.get_layout(), self.uniform.get_layout()],
                 self.render_pass.render_pass.as_ref().unwrap(),
                 Rc::clone(&self.device),
@@ -435,7 +425,7 @@ impl<B: Backend> RendererState<B> {
                 Some(cmd_buffer) => cmd_buffer,
                 None => command_pool.allocate_one(command::Level::Primary),
             };
-            cmd_buffer.begin();
+            cmd_buffer.begin_primary(command::CommandBufferFlags::ONE_TIME_SUBMIT);
             cmd_buffer.set_viewports(0, &[self.viewport.clone()]);
             cmd_buffer.set_scissors(0, &[self.viewport.rect]);
             cmd_buffer.bind_graphics_pipeline(self.pipeline.pipeline.as_ref().unwrap());
@@ -456,17 +446,19 @@ impl<B: Backend> RendererState<B> {
                 &[],
             ); //TODO
 
-            {
-                let mut encoder = cmd_buffer.begin_render_pass_inline(
-                    self.render_pass.render_pass.as_ref().unwrap(),
-                    framebuffer,
-                    self.viewport.rect,
-                    &[command::ClearValue::Color(command::ClearColor::Sfloat([
-                        cr, cg, cb, 1.0,
-                    ]))],
-                );
-                encoder.draw(0..3, 0..1);
-            }
+            cmd_buffer.begin_render_pass(
+                self.render_pass.render_pass.as_ref().unwrap(),
+                &framebuffer,
+                self.viewport.rect,
+                &[command::ClearValue {
+                    color: command::ClearColor {
+                        float32: [cr, cg, cb, 1.0],
+                    },
+                }],
+                command::SubpassContents::Inline,
+            );
+            cmd_buffer.draw(0..3, 0..1);
+            cmd_buffer.end_render_pass();
             cmd_buffer.finish();
 
             let submission = Submission {
@@ -545,7 +537,7 @@ impl<B: Backend> RendererState<B> {
                 Some(cmd_buffer) => cmd_buffer,
                 None => command_pool.allocate_one(command::Level::Primary),
             };
-            cmd_buffer.begin();
+            cmd_buffer.begin_primary(command::CommandBufferFlags::ONE_TIME_SUBMIT);
 
             cmd_buffer.set_viewports(0, &[self.viewport.clone()]);
             cmd_buffer.set_scissors(0, &[self.viewport.rect]);
@@ -559,19 +551,21 @@ impl<B: Backend> RendererState<B> {
                     self.uniform.desc.as_ref().unwrap().set.as_ref().unwrap(),
                 ],
                 &[],
-            ); //TODO
+            );
 
-            {
-                let mut encoder = cmd_buffer.begin_render_pass_inline(
-                    self.render_pass.render_pass.as_ref().unwrap(),
-                    framebuffer,
-                    self.viewport.rect,
-                    &[command::ClearValue::Color(command::ClearColor::Sfloat([
-                        cr, cg, cb, 1.0,
-                    ]))],
-                );
-                encoder.draw(0..6, 0..1);
-            }
+            cmd_buffer.begin_render_pass(
+                self.render_pass.render_pass.as_ref().unwrap(),
+                &framebuffer,
+                self.viewport.rect,
+                &[command::ClearValue {
+                    color: command::ClearColor {
+                        float32: [cr, cg, cb, 1.0],
+                    },
+                }],
+                command::SubpassContents::Inline,
+            );
+            cmd_buffer.draw(0..6, 0..1);
+            cmd_buffer.end_render_pass();
             cmd_buffer.finish();
 
             let submission = Submission {
@@ -601,12 +595,6 @@ impl<B: Backend> RendererState<B> {
             }
         }
     }
-
-    fn mainloop(&mut self)
-    where
-        B::Surface: SurfaceTrait,
-    {
-    }
 }
 
 impl<B: Backend> Drop for RendererState<B> {
@@ -626,55 +614,46 @@ impl<B: Backend> Drop for RendererState<B> {
     }
 }
 
-struct WindowState {
-    events_loop: winit::event_loop::EventLoop<()>,
-    wb: Option<winit::window::WindowBuilder>,
-}
-
-impl WindowState {
-    fn new() -> WindowState {
-        let events_loop = winit::event_loop::EventLoop::new();
-
-        let wb = winit::window::WindowBuilder::new()
-            .with_min_inner_size(winit::dpi::LogicalSize::new(1.0, 1.0))
-            .with_inner_size(winit::dpi::LogicalSize::new(
-                DIMS.width as _,
-                DIMS.height as _,
-            ))
-            .with_title("colour-uniform".to_string());
-
-        WindowState {
-            events_loop,
-            wb: Some(wb),
-        }
-    }
-}
-
 struct BackendState<B: Backend> {
-    surface: B::Surface,
+    instance: Option<B::Instance>,
+    surface: ManuallyDrop<B::Surface>,
     adapter: AdapterState<B>,
+    /// Needs to be kept alive even if its not used directly
+    #[allow(dead_code)]
     window: winit::window::Window,
 }
 
 #[cfg(any(feature = "vulkan", feature = "metal"))]
-fn create_backend(window_state: &mut WindowState) -> (BackendState<back::Backend>, back::Instance) {
-    let window = window_state
-        .wb
-        .take()
-        .unwrap()
-        .build(&window_state.events_loop)
-        .unwrap();
-    let instance = back::Instance::create("gfx-rs colour-uniform", 1);
-    let surface = instance.create_surface(&window);
+fn create_backend(
+    wb: winit::window::WindowBuilder,
+    event_loop: &winit::event_loop::EventLoop<()>,
+) -> BackendState<back::Backend> {
+    let window = wb.build(event_loop).unwrap();
+    let instance =
+        back::Instance::create("gfx-rs colour-uniform", 1).expect("Failed to create an instance!");
+    let surface = unsafe {
+        instance
+            .create_surface(&window)
+            .expect("Failed to create a surface!")
+    };
     let mut adapters = instance.enumerate_adapters();
-    (
-        BackendState {
-            adapter: AdapterState::new(&mut adapters),
-            surface,
-            window,
-        },
-        instance,
-    )
+    BackendState {
+        instance: Some(instance),
+        adapter: AdapterState::new(&mut adapters),
+        surface: ManuallyDrop::new(surface),
+        window,
+    }
+}
+
+impl<B: Backend> Drop for BackendState<B> {
+    fn drop(&mut self) {
+        if let Some(instance) = &self.instance {
+            unsafe {
+                let surface = ManuallyDrop::into_inner(ptr::read(&self.surface));
+                instance.destroy_surface(surface);
+            }
+        }
+    }
 }
 
 struct AdapterState<B: Backend> {
@@ -715,13 +694,23 @@ struct DeviceState<B: Backend> {
 
 impl<B: Backend> DeviceState<B> {
     fn new(adapter: Adapter<B>, surface: &B::Surface) -> Self {
-        let (device, queues) = adapter
-            .open_with::<_>(1, |family| surface.supports_queue_family(family))
+        let family = adapter
+            .queue_families
+            .iter()
+            .find(|family| {
+                surface.supports_queue_family(family) && family.queue_type().supports_graphics()
+            })
             .unwrap();
+        let mut gpu = unsafe {
+            adapter
+                .physical_device
+                .open(&[(family, &[1.0])], hal::Features::empty())
+                .unwrap()
+        };
 
         DeviceState {
-            device,
-            queues,
+            device: gpu.device,
+            queues: gpu.queue_groups.pop().unwrap(),
             physical_device: adapter.physical_device,
         }
     }
@@ -754,18 +743,10 @@ impl<B: Backend> RenderPassState<B> {
                 preserves: &[],
             };
 
-            let dependency = pass::SubpassDependency {
-                passes: pass::SubpassRef::External..pass::SubpassRef::Pass(0),
-                stages: PipelineStage::COLOR_ATTACHMENT_OUTPUT
-                    ..PipelineStage::COLOR_ATTACHMENT_OUTPUT,
-                accesses: i::Access::empty()
-                    ..(i::Access::COLOR_ATTACHMENT_READ | i::Access::COLOR_ATTACHMENT_WRITE),
-            };
-
             device
                 .borrow()
                 .device
-                .create_render_pass(&[attachment], &[subpass], &[dependency])
+                .create_render_pass(&[attachment], &[subpass], &[])
                 .ok()
         };
 
@@ -810,13 +791,13 @@ impl<B: Backend> BufferState<B> {
         let mut buffer: B::Buffer;
         let size: u64;
 
-        let stride = size_of::<T>() as u64;
-        let upload_size = data_source.len() as u64 * stride;
+        let stride = size_of::<T>();
+        let upload_size = data_source.len() * stride;
 
         {
             let device = &device_ptr.borrow().device;
 
-            buffer = device.create_buffer(upload_size, usage).unwrap();
+            buffer = device.create_buffer(upload_size as u64, usage).unwrap();
             let mem_req = device.get_buffer_requirements(&buffer);
 
             // A note about performance: Using CPU_VISIBLE memory is convenient because it can be
@@ -839,13 +820,9 @@ impl<B: Backend> BufferState<B> {
             size = mem_req.size;
 
             // TODO: check transitions: read/write mapping and vertex buffer read
-            {
-                let mut data_target = device
-                    .acquire_mapping_writer::<T>(&memory, 0..size)
-                    .unwrap();
-                data_target[0..data_source.len()].copy_from_slice(data_source);
-                device.release_mapping_writer(data_target).unwrap();
-            }
+            let mapping = device.map_memory(&memory, 0..size).unwrap();
+            ptr::copy_nonoverlapping(data_source.as_ptr() as *const u8, mapping, upload_size);
+            device.unmap_memory(&memory);
         }
 
         BufferState {
@@ -862,17 +839,17 @@ impl<B: Backend> BufferState<B> {
     {
         let device = &self.device.borrow().device;
 
-        let stride = size_of::<T>() as u64;
-        let upload_size = data_source.len() as u64 * stride;
+        let stride = size_of::<T>();
+        let upload_size = data_source.len() * stride;
 
-        assert!(offset + upload_size <= self.size);
+        assert!(offset + upload_size as u64 <= self.size);
+        let memory = self.memory.as_ref().unwrap();
 
         unsafe {
-            let mut data_target = device
-                .acquire_mapping_writer::<T>(self.memory.as_ref().unwrap(), offset..self.size)
-                .unwrap();
-            data_target[0..data_source.len()].copy_from_slice(data_source);
-            device.release_mapping_writer(data_target).unwrap();
+            // TODO: check transitions: read/write mapping and vertex buffer read
+            let mapping = device.map_memory(memory, offset..self.size).unwrap();
+            ptr::copy_nonoverlapping(data_source.as_ptr() as *const u8, mapping, upload_size);
+            device.unmap_memory(memory);
         }
     }
 
@@ -915,22 +892,17 @@ impl<B: Backend> BufferState<B> {
             size = mem_reqs.size;
 
             // copy image data into staging buffer
-            {
-                let mut data_target = device
-                    .acquire_mapping_writer::<u8>(&memory, 0..size)
-                    .unwrap();
-
-                for y in 0..height as usize {
-                    let data_source_slice = &(**img)
-                        [y * (width as usize) * stride..(y + 1) * (width as usize) * stride];
-                    let dest_base = y * row_pitch as usize;
-
-                    data_target[dest_base..dest_base + data_source_slice.len()]
-                        .copy_from_slice(data_source_slice);
-                }
-
-                device.release_mapping_writer(data_target).unwrap();
+            let mapping = device.map_memory(&memory, 0..size).unwrap();
+            for y in 0..height as usize {
+                let data_source_slice =
+                    &(**img)[y * (width as usize) * stride..(y + 1) * (width as usize) * stride];
+                ptr::copy_nonoverlapping(
+                    data_source_slice.as_ptr(),
+                    mapping.offset(y as isize * row_pitch as isize),
+                    data_source_slice.len(),
+                );
             }
+            device.unmap_memory(&memory);
         }
 
         (
@@ -1152,7 +1124,7 @@ impl<B: Backend> ImageState<B> {
             .unwrap();
 
         let sampler = device
-            .create_sampler(i::SamplerInfo::new(i::Filter::Linear, i::WrapMode::Clamp))
+            .create_sampler(&i::SamplerDesc::new(i::Filter::Linear, i::WrapMode::Clamp))
             .expect("Can't create sampler");
 
         desc.write_to_state(
@@ -1178,8 +1150,8 @@ impl<B: Backend> ImageState<B> {
 
         // copy buffer to texture
         {
-            let mut cmd_buffer = staging_pool.allocate_one();
-            cmd_buffer.begin();
+            let mut cmd_buffer = staging_pool.allocate_one(command::Level::Primary);
+            cmd_buffer.begin_primary(command::CommandBufferFlags::ONE_TIME_SUBMIT);
 
             let image_barrier = m::Barrier::Image {
                 states: (i::Access::empty(), i::Layout::Undefined)
@@ -1364,7 +1336,7 @@ impl<B: Backend> PipelineState<B> {
 
                 let mut pipeline_desc = pso::GraphicsPipelineDesc::new(
                     shader_entries,
-                    hal::Primitive::TriangleList,
+                    pso::Primitive::TriangleList,
                     pso::Rasterizer::FILL,
                     &pipeline_layout,
                     subpass,
@@ -1466,7 +1438,7 @@ impl<B: Backend> PipelineState<B> {
 
                 let mut pipeline_desc = pso::GraphicsPipelineDesc::new(
                     shader_entries,
-                    hal::Primitive::TriangleList,
+                    pso::Primitive::TriangleList,
                     pso::Rasterizer::FILL,
                     &pipeline_layout,
                     subpass,
@@ -1535,9 +1507,12 @@ struct SwapchainState<B: Backend> {
 
 impl<B: Backend> SwapchainState<B> {
     unsafe fn new(backend: &mut BackendState<B>, device: Rc<RefCell<DeviceState<B>>>) -> Self {
-        let (caps, formats, _present_modes) = backend
+        let caps = backend
             .surface
-            .compatibility(&device.borrow().physical_device);
+            .capabilities(&device.borrow().physical_device);
+        let formats = backend
+            .surface
+            .supported_formats(&device.borrow().physical_device);
         println!("formats: {:?}", formats);
         let format = formats.map_or(f::Format::Rgba8Srgb, |formats| {
             formats
@@ -1658,7 +1633,7 @@ impl<B: Backend> FramebufferState<B> {
                     .borrow()
                     .device
                     .create_command_pool(
-                        &device.borrow().queues,
+                        device.borrow().queues.family,
                         pool::CommandPoolCreateFlags::empty(),
                     )
                     .expect("Can't create command pool"),
@@ -1772,10 +1747,17 @@ impl<B: Backend> Drop for FramebufferState<B> {
 fn main() {
     env_logger::init();
 
-    let mut window = WindowState::new();
-    let (backend, _instance) = create_backend(&mut window);
+    let event_loop = winit::event_loop::EventLoop::new();
+    let wb = winit::window::WindowBuilder::new()
+        .with_min_inner_size(winit::dpi::LogicalSize::new(1.0, 1.0))
+        .with_inner_size(winit::dpi::LogicalSize::new(
+            DIMS.width as _,
+            DIMS.height as _,
+        ))
+        .with_title("colour-uniform".to_string());
+    let backend = create_backend(wb, &event_loop);
 
-    let mut renderer_state = unsafe { RendererState::new(backend, window) };
+    let mut renderer_state = unsafe { RendererState::new(backend) };
     let mut recreate_swapchain = false;
 
     let mut r = 1.0f32;
@@ -1801,147 +1783,130 @@ fn main() {
         "\tSet {:?} color to: {} (press enter/C to confirm)",
         cur_color, cur_value
     );
+    match renderer_state.draw_rust_logo(cr, cg, cb) {
+        Ok(()) => (),
+        Err(_) => {
+            recreate_swapchain = true;
+        }
+    }
 
-    renderer_state
-        .window
-        .events_loop
-        .run(move |event, _, control_flow| {
-            *control_flow = winit::event_loop::ControlFlow::Exit;
-            let uniform = &mut renderer_state.uniform;
-            let viewport = &mut renderer_state.viewport;
-            if let winit::event::Event::WindowEvent { event, .. } = event {
-                #[allow(unused_variables)]
-                match event {
-                    winit::event::WindowEvent::KeyboardInput {
-                        input:
-                            winit::event::KeyboardInput {
-                                virtual_keycode: Some(winit::event::VirtualKeyCode::Escape),
-                                ..
-                            },
-                        ..
-                    }
-                    | winit::event::WindowEvent::CloseRequested => {
-                        *control_flow = winit::event_loop::ControlFlow::Exit
-                    }
-                    winit::event::WindowEvent::Resized(dims) => {
-                        recreate_swapchain = true;
-                    }
-                    winit::event::WindowEvent::RedrawRequested => {
-                        if recreate_swapchain {
-                            renderer_state.recreate_swapchain();
-                            recreate_swapchain = false;
-                        }
-
-                        match renderer_state.draw_triangle(cr, cg, cb, x, y) {
-                            Ok(()) => (),
-                            Err(_) => {
-                                recreate_swapchain = true;
-                            }
-                        }
-                    }
-                    winit::event::WindowEvent::KeyboardInput {
-                        input:
-                            winit::event::KeyboardInput {
-                                virtual_keycode,
-                                state: winit::event::ElementState::Pressed,
-                                ..
-                            },
-                        ..
-                    } => {
-                        if let Some(kc) = virtual_keycode {
-                            match kc {
-                                winit::event::VirtualKeyCode::Key0 => {
-                                    cur_value = cur_value * 10 + 0
-                                }
-                                winit::event::VirtualKeyCode::Key1 => {
-                                    cur_value = cur_value * 10 + 1
-                                }
-                                winit::event::VirtualKeyCode::Key2 => {
-                                    cur_value = cur_value * 10 + 2
-                                }
-                                winit::event::VirtualKeyCode::Key3 => {
-                                    cur_value = cur_value * 10 + 3
-                                }
-                                winit::event::VirtualKeyCode::Key4 => {
-                                    cur_value = cur_value * 10 + 4
-                                }
-                                winit::event::VirtualKeyCode::Key5 => {
-                                    cur_value = cur_value * 10 + 5
-                                }
-                                winit::event::VirtualKeyCode::Key6 => {
-                                    cur_value = cur_value * 10 + 6
-                                }
-                                winit::event::VirtualKeyCode::Key7 => {
-                                    cur_value = cur_value * 10 + 7
-                                }
-                                winit::event::VirtualKeyCode::Key8 => {
-                                    cur_value = cur_value * 10 + 8
-                                }
-                                winit::event::VirtualKeyCode::Key9 => {
-                                    cur_value = cur_value * 10 + 9
-                                }
-                                winit::event::VirtualKeyCode::R => {
-                                    cur_value = 0;
-                                    cur_color = Color::Red
-                                }
-                                winit::event::VirtualKeyCode::G => {
-                                    cur_value = 0;
-                                    cur_color = Color::Green
-                                }
-                                winit::event::VirtualKeyCode::B => {
-                                    cur_value = 0;
-                                    cur_color = Color::Blue
-                                }
-                                winit::event::VirtualKeyCode::A => {
-                                    cur_value = 0;
-                                    cur_color = Color::Alpha
-                                }
-                                winit::event::VirtualKeyCode::Return => {
-                                    match cur_color {
-                                        Color::Red => r = cur_value as f32 / 255.0,
-                                        Color::Green => g = cur_value as f32 / 255.0,
-                                        Color::Blue => b = cur_value as f32 / 255.0,
-                                        Color::Alpha => a = cur_value as f32 / 255.0,
-                                    }
-                                    uniform
-                                        .buffer
-                                        .as_mut()
-                                        .unwrap()
-                                        .update_data(0, &[r, g, b, a]);
-                                    cur_value = 0;
-
-                                    println!("Colour updated!");
-                                }
-                                winit::event::VirtualKeyCode::C => {
-                                    match cur_color {
-                                        Color::Red => cr = cur_value as f32 / 255.0,
-                                        Color::Green => cg = cur_value as f32 / 255.0,
-                                        Color::Blue => cb = cur_value as f32 / 255.0,
-                                        Color::Alpha => {
-                                            error!("Alpha is not valid for the background.");
-                                            return;
-                                        }
-                                    }
-                                    cur_value = 0;
-
-                                    println!("Background color updated!");
-                                }
-                                _ => return,
-                            }
-                            println!(
-                                "Set {:?} color to: {} (press enter/C to confirm)",
-                                cur_color, cur_value
-                            )
-                        }
-                    }
-                    winit::event::WindowEvent::CursorMoved { position, .. } => {
-                        x = (position.x as f32) / (viewport.rect.w as f32) * 4.0 - 1.0;
-                        y = (position.y as f32) / (viewport.rect.h as f32) * 4.0 - 1.0;
-                    }
-                    _ => (),
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = winit::event_loop::ControlFlow::Wait;
+        let uniform = &mut renderer_state.uniform;
+        let viewport = &mut renderer_state.viewport;
+        if let winit::event::Event::WindowEvent { event, .. } = event {
+            #[allow(unused_variables)]
+            match event {
+                winit::event::WindowEvent::KeyboardInput {
+                    input:
+                        winit::event::KeyboardInput {
+                            virtual_keycode: Some(winit::event::VirtualKeyCode::Escape),
+                            ..
+                        },
+                    ..
                 }
-            };
-        });
+                | winit::event::WindowEvent::CloseRequested => {
+                    *control_flow = winit::event_loop::ControlFlow::Exit
+                }
+                winit::event::WindowEvent::Resized(dims) => {
+                    recreate_swapchain = true;
+                }
+                winit::event::WindowEvent::RedrawRequested => {
+                    if recreate_swapchain {
+                        renderer_state.recreate_swapchain();
+                        recreate_swapchain = false;
+                    }
+
+                    match renderer_state.draw_rust_logo(cr, cg, cb) {
+                        Ok(()) => (),
+                        Err(_) => {
+                            recreate_swapchain = true;
+                        }
+                    }
+                }
+                winit::event::WindowEvent::KeyboardInput {
+                    input:
+                        winit::event::KeyboardInput {
+                            virtual_keycode,
+                            state: winit::event::ElementState::Pressed,
+                            ..
+                        },
+                    ..
+                } => {
+                    if let Some(kc) = virtual_keycode {
+                        match kc {
+                            winit::event::VirtualKeyCode::Key0 => cur_value = cur_value * 10 + 0,
+                            winit::event::VirtualKeyCode::Key1 => cur_value = cur_value * 10 + 1,
+                            winit::event::VirtualKeyCode::Key2 => cur_value = cur_value * 10 + 2,
+                            winit::event::VirtualKeyCode::Key3 => cur_value = cur_value * 10 + 3,
+                            winit::event::VirtualKeyCode::Key4 => cur_value = cur_value * 10 + 4,
+                            winit::event::VirtualKeyCode::Key5 => cur_value = cur_value * 10 + 5,
+                            winit::event::VirtualKeyCode::Key6 => cur_value = cur_value * 10 + 6,
+                            winit::event::VirtualKeyCode::Key7 => cur_value = cur_value * 10 + 7,
+                            winit::event::VirtualKeyCode::Key8 => cur_value = cur_value * 10 + 8,
+                            winit::event::VirtualKeyCode::Key9 => cur_value = cur_value * 10 + 9,
+                            winit::event::VirtualKeyCode::R => {
+                                cur_value = 0;
+                                cur_color = Color::Red
+                            }
+                            winit::event::VirtualKeyCode::G => {
+                                cur_value = 0;
+                                cur_color = Color::Green
+                            }
+                            winit::event::VirtualKeyCode::B => {
+                                cur_value = 0;
+                                cur_color = Color::Blue
+                            }
+                            winit::event::VirtualKeyCode::A => {
+                                cur_value = 0;
+                                cur_color = Color::Alpha
+                            }
+                            winit::event::VirtualKeyCode::Return => {
+                                match cur_color {
+                                    Color::Red => r = cur_value as f32 / 255.0,
+                                    Color::Green => g = cur_value as f32 / 255.0,
+                                    Color::Blue => b = cur_value as f32 / 255.0,
+                                    Color::Alpha => a = cur_value as f32 / 255.0,
+                                }
+                                uniform
+                                    .buffer
+                                    .as_mut()
+                                    .unwrap()
+                                    .update_data(0, &[r, g, b, a]);
+                                cur_value = 0;
+
+                                println!("Colour updated!");
+                            }
+                            winit::event::VirtualKeyCode::C => {
+                                match cur_color {
+                                    Color::Red => cr = cur_value as f32 / 255.0,
+                                    Color::Green => cg = cur_value as f32 / 255.0,
+                                    Color::Blue => cb = cur_value as f32 / 255.0,
+                                    Color::Alpha => {
+                                        error!("Alpha is not valid for the background.");
+                                        return;
+                                    }
+                                }
+                                cur_value = 0;
+
+                                println!("Background color updated!");
+                            }
+                            _ => return,
+                        }
+                        println!(
+                            "Set {:?} color to: {} (press enter/C to confirm)",
+                            cur_color, cur_value
+                        )
+                    }
+                }
+                winit::event::WindowEvent::CursorMoved { position, .. } => {
+                    x = (position.x as f32) / (viewport.rect.w as f32) * 4.0 - 1.0;
+                    y = (position.y as f32) / (viewport.rect.h as f32) * 4.0 - 1.0;
+                }
+                _ => (),
+            }
+        };
+    });
 }
 
 #[cfg(not(any(feature = "vulkan", feature = "metal",)))]
