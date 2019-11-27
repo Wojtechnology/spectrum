@@ -25,11 +25,14 @@ struct Dimensions<T> {
 
 use std::cell::RefCell;
 use std::io::Cursor;
-use std::mem::{size_of, ManuallyDrop};
+use std::mem::size_of;
 use std::rc::Rc;
 use std::time::Instant;
 use std::{fs, iter, ptr};
 
+use hal::format::{ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
+use hal::pass::Subpass;
+use hal::pso::{PipelineStage, ShaderStageFlags, VertexInputRate};
 use hal::{
     adapter::{Adapter, MemoryType},
     buffer, command,
@@ -41,85 +44,15 @@ use hal::{
     window as w, Backend,
 };
 
-use hal::format::{ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
-use hal::pass::Subpass;
-use hal::pso::{PipelineStage, ShaderStageFlags, VertexInputRate};
+use spectrum_viz::adapter_state::AdapterState;
+use spectrum_viz::backend_state::{create_backend, BackendState};
+use spectrum_viz::gx_constant::{ACTUAL_QUAD, QUAD, TRIANGLE};
+use spectrum_viz::gx_object::Vertex;
 
 const ENTRY_NAME: &str = "main";
 const DIMS: w::Extent2D = w::Extent2D {
     width: 1024,
     height: 768,
-};
-
-const TRIANGLE: [[f32; 5]; 3] = [
-    [-0.5, 0.5, 1.0, 0.0, 0.0],
-    [-0.5, -0.5, 0.0, 1.0, 0.0],
-    [0.5, -0.33, 0.0, 0.0, 1.0],
-];
-
-#[derive(Debug, Clone, Copy)]
-struct Vertex {
-    a_pos: [f32; 2],
-    a_uv: [f32; 2],
-}
-
-const QUAD: [Vertex; 6] = [
-    Vertex {
-        a_pos: [-0.5, 0.33],
-        a_uv: [0.0, 1.0],
-    },
-    Vertex {
-        a_pos: [0.5, 0.33],
-        a_uv: [1.0, 1.0],
-    },
-    Vertex {
-        a_pos: [0.5, -0.33],
-        a_uv: [1.0, 0.0],
-    },
-    Vertex {
-        a_pos: [-0.5, 0.33],
-        a_uv: [0.0, 1.0],
-    },
-    Vertex {
-        a_pos: [0.5, -0.33],
-        a_uv: [1.0, 0.0],
-    },
-    Vertex {
-        a_pos: [-0.5, -0.33],
-        a_uv: [0.0, 0.0],
-    },
-];
-
-#[derive(Debug, Clone, Copy)]
-pub struct Quad {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-}
-
-impl Quad {
-    pub fn vertex_attributes(self) -> [f32; 4 * (2 + 3 + 2)] {
-        let x = self.x;
-        let y = self.y;
-        let w = self.w;
-        let h = self.h;
-        #[cfg_attr(rustfmt, rustfmt_skip)]
-        [
-        // X    Y    R    G    B                  U    V
-        x  , y+h, 1.0, 0.0, 0.0, /* red     */ 0.0, 1.0, /* bottom left */
-        x  , y  , 0.0, 1.0, 0.0, /* green   */ 0.0, 0.0, /* top left */
-        x+w, y  , 0.0, 0.0, 1.0, /* blue    */ 1.0, 0.0, /* top right */
-        x+w, y+h, 1.0, 0.0, 1.0, /* magenta */ 1.0, 1.0, /* bottom right */
-        ]
-    }
-}
-
-const ACTUAL_QUAD: Quad = Quad {
-    x: 0.0,
-    y: 0.0,
-    w: 1.0,
-    h: 1.0,
 };
 
 const COLOR_RANGE: i::SubresourceRange = i::SubresourceRange {
@@ -147,7 +80,7 @@ struct RendererState<B: Backend> {
     framebuffer: FramebufferState<B>,
     viewport: pso::Viewport,
     image: ImageState<B>,
-    creation_instant: std::time::Instant,
+    creation_instant: Instant,
 }
 
 #[derive(Debug)]
@@ -369,14 +302,7 @@ impl<B: Backend> RendererState<B> {
         }
     }
 
-    fn draw_triangle(
-        &mut self,
-        cr: f32,
-        cg: f32,
-        cb: f32,
-        x: f32,
-        y: f32,
-    ) -> Result<(), &'static str> {
+    fn draw_triangle(&mut self, cr: f32, cg: f32, cb: f32) -> Result<(), &'static str> {
         let sem_index = self.framebuffer.next_acq_pre_pair_index();
 
         let frame: w::SwapImageIndex = unsafe {
@@ -611,78 +537,6 @@ impl<B: Backend> Drop for RendererState<B> {
                 .device
                 .destroy_descriptor_pool(self.uniform_desc_pool.take().unwrap());
             self.swapchain.take();
-        }
-    }
-}
-
-struct BackendState<B: Backend> {
-    instance: Option<B::Instance>,
-    surface: ManuallyDrop<B::Surface>,
-    adapter: AdapterState<B>,
-    /// Needs to be kept alive even if its not used directly
-    #[allow(dead_code)]
-    window: winit::window::Window,
-}
-
-#[cfg(any(feature = "vulkan", feature = "metal"))]
-fn create_backend(
-    wb: winit::window::WindowBuilder,
-    event_loop: &winit::event_loop::EventLoop<()>,
-) -> BackendState<back::Backend> {
-    let window = wb.build(event_loop).unwrap();
-    let instance =
-        back::Instance::create("gfx-rs colour-uniform", 1).expect("Failed to create an instance!");
-    let surface = unsafe {
-        instance
-            .create_surface(&window)
-            .expect("Failed to create a surface!")
-    };
-    let mut adapters = instance.enumerate_adapters();
-    BackendState {
-        instance: Some(instance),
-        adapter: AdapterState::new(&mut adapters),
-        surface: ManuallyDrop::new(surface),
-        window,
-    }
-}
-
-impl<B: Backend> Drop for BackendState<B> {
-    fn drop(&mut self) {
-        if let Some(instance) = &self.instance {
-            unsafe {
-                let surface = ManuallyDrop::into_inner(ptr::read(&self.surface));
-                instance.destroy_surface(surface);
-            }
-        }
-    }
-}
-
-struct AdapterState<B: Backend> {
-    adapter: Option<Adapter<B>>,
-    memory_types: Vec<MemoryType>,
-    limits: hal::Limits,
-}
-
-impl<B: Backend> AdapterState<B> {
-    fn new(adapters: &mut Vec<Adapter<B>>) -> Self {
-        print!("Chosen: ");
-
-        for adapter in adapters.iter() {
-            println!("{:?}", adapter.info);
-        }
-
-        AdapterState::<B>::new_adapter(adapters.remove(0))
-    }
-
-    fn new_adapter(adapter: Adapter<B>) -> Self {
-        let memory_types = adapter.physical_device.memory_properties().memory_types;
-        let limits = adapter.physical_device.limits();
-        println!("{:?}", limits);
-
-        AdapterState {
-            adapter: Some(adapter),
-            memory_types,
-            limits,
         }
     }
 }
@@ -1785,7 +1639,7 @@ fn main() {
         cur_color, cur_value
     );
 
-    match renderer_state.draw_triangle(cr, cg, cb, x, y) {
+    match renderer_state.draw_triangle(cr, cg, cb) {
         Ok(()) => (),
         Err(_) => {
             recreate_swapchain = true;
@@ -1825,7 +1679,7 @@ fn main() {
 
                         frame_num += 1;
                         println!("Frame num {} rendering!", frame_num);
-                        match renderer_state.draw_triangle(cr, cg, cb, x, y) {
+                        match renderer_state.draw_triangle(cr, cg, cb) {
                             Ok(()) => (),
                             Err(e) => {
                                 println!("Error: {}, recreating swapchain", e);

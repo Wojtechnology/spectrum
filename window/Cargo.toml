@@ -1,5 +1,5 @@
 [package]
-name = "window"
+name = "spectrum-viz"
 version = "0.1.0"
 authors = ["Wojtek Swiderski <wswiders@uwaterloo.ca>"]
 edition = "2018"
