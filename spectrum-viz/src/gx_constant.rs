@@ -1,5 +1,7 @@
 extern crate gfx_hal as hal;
 
+use hal::format as f;
+use hal::image as i;
 use hal::window as w;
 
 use crate::gx_object::{Quad, Vertex};
@@ -8,6 +10,12 @@ use crate::gx_object::{Quad, Vertex};
 pub const DIMS: w::Extent2D = w::Extent2D {
     width: 1024,
     height: 768,
+};
+
+pub const COLOR_RANGE: i::SubresourceRange = i::SubresourceRange {
+    aspects: f::Aspects::COLOR,
+    levels: 0..1,
+    layers: 0..1,
 };
 
 pub const TRIANGLE: [[f32; 5]; 3] = [
