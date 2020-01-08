@@ -30,30 +30,28 @@ use std::rc::Rc;
 use std::time::Instant;
 use std::{fs, iter, ptr};
 
-use hal::format::{ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
+use hal::format::{Rgba8Srgb as ColorFormat, Swizzle};
 use hal::pass::Subpass;
 use hal::pso::{PipelineStage, ShaderStageFlags, VertexInputRate};
 use hal::{
-    adapter::{Adapter, MemoryType},
+    adapter::MemoryType,
     buffer, command,
     format::{self as f, AsFormat},
     image as i, memory as m, pass, pool,
     prelude::*,
     pso,
-    queue::{QueueGroup, Submission},
+    queue::Submission,
     window as w, Backend,
 };
 
 use spectrum_viz::adapter_state::AdapterState;
 use spectrum_viz::backend_state::{create_backend, BackendState};
-use spectrum_viz::gx_constant::{ACTUAL_QUAD, QUAD, TRIANGLE};
+use spectrum_viz::device_state::DeviceState;
+use spectrum_viz::gx_constant::{ACTUAL_QUAD, DIMS, QUAD, TRIANGLE};
 use spectrum_viz::gx_object::Vertex;
+use spectrum_viz::swapchain_state::SwapchainState;
 
 const ENTRY_NAME: &str = "main";
-const DIMS: w::Extent2D = w::Extent2D {
-    width: 1024,
-    height: 768,
-};
 
 const COLOR_RANGE: i::SubresourceRange = i::SubresourceRange {
     aspects: f::Aspects::COLOR,
@@ -68,19 +66,20 @@ impl SurfaceTrait for <back::Backend as hal::Backend>::Surface {}
 struct RendererState<B: Backend> {
     uniform_desc_pool: Option<B::DescriptorPool>,
     img_desc_pool: Option<B::DescriptorPool>,
-    swapchain: Option<SwapchainState<B>>,
-    device: Rc<RefCell<DeviceState<B>>>,
+    viewport: pso::Viewport,
+    creation_instant: Instant,
+    // Locally defined data
     backend: BackendState<B>,
+    render_pass: RenderPassState<B>,
     vertex_buffer: BufferState<B>,
     triangle_vertex_buffer: BufferState<B>,
     quad_vertex_buffer: BufferState<B>,
-    render_pass: RenderPassState<B>,
-    uniform: Uniform<B>,
+    image: ImageState<B>,
     pipeline: PipelineState<B>,
     framebuffer: FramebufferState<B>,
-    viewport: pso::Viewport,
-    image: ImageState<B>,
-    creation_instant: Instant,
+    uniform: Uniform<B>,
+    swapchain: Option<SwapchainState<B>>,
+    device: Rc<RefCell<DeviceState<B>>>,
 }
 
 #[derive(Debug)]
@@ -537,36 +536,6 @@ impl<B: Backend> Drop for RendererState<B> {
                 .device
                 .destroy_descriptor_pool(self.uniform_desc_pool.take().unwrap());
             self.swapchain.take();
-        }
-    }
-}
-
-struct DeviceState<B: Backend> {
-    device: B::Device,
-    physical_device: B::PhysicalDevice,
-    queues: QueueGroup<B>,
-}
-
-impl<B: Backend> DeviceState<B> {
-    fn new(adapter: Adapter<B>, surface: &B::Surface) -> Self {
-        let family = adapter
-            .queue_families
-            .iter()
-            .find(|family| {
-                surface.supports_queue_family(family) && family.queue_type().supports_graphics()
-            })
-            .unwrap();
-        let mut gpu = unsafe {
-            adapter
-                .physical_device
-                .open(&[(family, &[1.0])], hal::Features::empty())
-                .unwrap()
-        };
-
-        DeviceState {
-            device: gpu.device,
-            queues: gpu.queue_groups.pop().unwrap(),
-            physical_device: adapter.physical_device,
         }
     }
 }
@@ -1348,62 +1317,6 @@ impl<B: Backend> Drop for PipelineState<B> {
         unsafe {
             device.destroy_graphics_pipeline(self.pipeline.take().unwrap());
             device.destroy_pipeline_layout(self.pipeline_layout.take().unwrap());
-        }
-    }
-}
-
-struct SwapchainState<B: Backend> {
-    swapchain: Option<B::Swapchain>,
-    backbuffer: Option<Vec<B::Image>>,
-    device: Rc<RefCell<DeviceState<B>>>,
-    extent: i::Extent,
-    format: f::Format,
-}
-
-impl<B: Backend> SwapchainState<B> {
-    unsafe fn new(backend: &mut BackendState<B>, device: Rc<RefCell<DeviceState<B>>>) -> Self {
-        let caps = backend
-            .surface
-            .capabilities(&device.borrow().physical_device);
-        let formats = backend
-            .surface
-            .supported_formats(&device.borrow().physical_device);
-        println!("formats: {:?}", formats);
-        let format = formats.map_or(f::Format::Rgba8Srgb, |formats| {
-            formats
-                .iter()
-                .find(|format| format.base_format().1 == ChannelType::Srgb)
-                .map(|format| *format)
-                .unwrap_or(formats[0])
-        });
-
-        println!("Surface format: {:?}", format);
-        let swap_config = w::SwapchainConfig::from_caps(&caps, format, DIMS);
-        let extent = swap_config.extent.to_extent();
-        let (swapchain, backbuffer) = device
-            .borrow()
-            .device
-            .create_swapchain(&mut backend.surface, swap_config, None)
-            .expect("Can't create swapchain");
-
-        let swapchain = SwapchainState {
-            swapchain: Some(swapchain),
-            backbuffer: Some(backbuffer),
-            device,
-            extent,
-            format,
-        };
-        swapchain
-    }
-}
-
-impl<B: Backend> Drop for SwapchainState<B> {
-    fn drop(&mut self) {
-        unsafe {
-            self.device
-                .borrow()
-                .device
-                .destroy_swapchain(self.swapchain.take().unwrap());
         }
     }
 }

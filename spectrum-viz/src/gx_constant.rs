@@ -1,4 +1,14 @@
+extern crate gfx_hal as hal;
+
+use hal::window as w;
+
 use crate::gx_object::{Quad, Vertex};
+
+// TODO: Move into another constants file
+pub const DIMS: w::Extent2D = w::Extent2D {
+    width: 1024,
+    height: 768,
+};
 
 pub const TRIANGLE: [[f32; 5]; 3] = [
     [-0.5, 0.5, 1.0, 0.0, 0.0],
