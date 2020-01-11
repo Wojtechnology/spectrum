@@ -18,23 +18,17 @@ extern crate glsl_to_spirv;
 extern crate image;
 extern crate winit;
 
-struct Dimensions<T> {
-    width: T,
-    height: T,
-}
-
 use std::cell::RefCell;
 use std::io::Cursor;
 use std::mem::size_of;
 use std::rc::Rc;
 use std::time::Instant;
-use std::{fs, iter, ptr};
+use std::{fs, iter};
 
 use hal::format::{Rgba8Srgb as ColorFormat, Swizzle};
 use hal::pass::Subpass;
 use hal::pso::{PipelineStage, ShaderStageFlags, VertexInputRate};
 use hal::{
-    adapter::MemoryType,
     buffer, command,
     format::{self as f, AsFormat},
     image as i, memory as m, pool,
@@ -46,18 +40,17 @@ use hal::{
 
 use spectrum_viz::adapter_state::AdapterState;
 use spectrum_viz::backend_state::{create_backend, BackendState};
+use spectrum_viz::buffer_state::BufferState;
+use spectrum_viz::desc_set::{DescSet, DescSetLayout, DescSetWrite};
 use spectrum_viz::device_state::DeviceState;
 use spectrum_viz::framebuffer_state::FramebufferState;
 use spectrum_viz::gx_constant::{ACTUAL_QUAD, COLOR_RANGE, DIMS, QUAD, TRIANGLE};
 use spectrum_viz::gx_object::Vertex;
 use spectrum_viz::render_pass_state::RenderPassState;
 use spectrum_viz::swapchain_state::SwapchainState;
+use spectrum_viz::uniform::Uniform;
 
 const ENTRY_NAME: &str = "main";
-
-trait SurfaceTrait {}
-
-impl SurfaceTrait for <back::Backend as hal::Backend>::Surface {}
 
 struct RendererState<B: Backend> {
     uniform_desc_pool: Option<B::DescriptorPool>,
@@ -533,296 +526,6 @@ impl<B: Backend> Drop for RendererState<B> {
                 .destroy_descriptor_pool(self.uniform_desc_pool.take().unwrap());
             self.swapchain.take();
         }
-    }
-}
-
-struct BufferState<B: Backend> {
-    memory: Option<B::Memory>,
-    buffer: Option<B::Buffer>,
-    device: Rc<RefCell<DeviceState<B>>>,
-    size: u64,
-}
-
-impl<B: Backend> BufferState<B> {
-    fn get_buffer(&self) -> &B::Buffer {
-        self.buffer.as_ref().unwrap()
-    }
-
-    unsafe fn new<T>(
-        device_ptr: Rc<RefCell<DeviceState<B>>>,
-        data_source: &[T],
-        usage: buffer::Usage,
-        memory_types: &[MemoryType],
-    ) -> Self
-    where
-        T: Copy,
-    {
-        let memory: B::Memory;
-        let mut buffer: B::Buffer;
-        let size: u64;
-
-        let stride = size_of::<T>();
-        let upload_size = data_source.len() * stride;
-
-        {
-            let device = &device_ptr.borrow().device;
-
-            buffer = device.create_buffer(upload_size as u64, usage).unwrap();
-            let mem_req = device.get_buffer_requirements(&buffer);
-
-            // A note about performance: Using CPU_VISIBLE memory is convenient because it can be
-            // directly memory mapped and easily updated by the CPU, but it is very slow and so should
-            // only be used for small pieces of data that need to be updated very frequently. For something like
-            // a vertex buffer that may be much larger and should not change frequently, you should instead
-            // use a DEVICE_LOCAL buffer that gets filled by copying data from a CPU_VISIBLE staging buffer.
-            let upload_type = memory_types
-                .iter()
-                .enumerate()
-                .position(|(id, mem_type)| {
-                    mem_req.type_mask & (1 << id) != 0
-                        && mem_type.properties.contains(m::Properties::CPU_VISIBLE)
-                })
-                .unwrap()
-                .into();
-
-            memory = device.allocate_memory(upload_type, mem_req.size).unwrap();
-            device.bind_buffer_memory(&memory, 0, &mut buffer).unwrap();
-            size = mem_req.size;
-
-            // TODO: check transitions: read/write mapping and vertex buffer read
-            let mapping = device.map_memory(&memory, 0..size).unwrap();
-            ptr::copy_nonoverlapping(data_source.as_ptr() as *const u8, mapping, upload_size);
-            device.unmap_memory(&memory);
-        }
-
-        BufferState {
-            memory: Some(memory),
-            buffer: Some(buffer),
-            device: device_ptr,
-            size,
-        }
-    }
-
-    fn update_data<T>(&mut self, offset: u64, data_source: &[T])
-    where
-        T: Copy,
-    {
-        let device = &self.device.borrow().device;
-
-        let stride = size_of::<T>();
-        let upload_size = data_source.len() * stride;
-
-        assert!(offset + upload_size as u64 <= self.size);
-        let memory = self.memory.as_ref().unwrap();
-
-        unsafe {
-            // TODO: check transitions: read/write mapping and vertex buffer read
-            let mapping = device.map_memory(memory, offset..self.size).unwrap();
-            ptr::copy_nonoverlapping(data_source.as_ptr() as *const u8, mapping, upload_size);
-            device.unmap_memory(memory);
-        }
-    }
-
-    unsafe fn new_texture(
-        device_ptr: Rc<RefCell<DeviceState<B>>>,
-        device: &B::Device,
-        img: &::image::ImageBuffer<::image::Rgba<u8>, Vec<u8>>,
-        adapter: &AdapterState<B>,
-        usage: buffer::Usage,
-    ) -> (Self, Dimensions<u32>, u32, usize) {
-        let (width, height) = img.dimensions();
-
-        let row_alignment_mask = adapter.limits.optimal_buffer_copy_pitch_alignment as u32 - 1;
-        let stride = 4usize;
-
-        let row_pitch = (width * stride as u32 + row_alignment_mask) & !row_alignment_mask;
-        let upload_size = (height * row_pitch) as u64;
-
-        let memory: B::Memory;
-        let mut buffer: B::Buffer;
-        let size: u64;
-
-        {
-            buffer = device.create_buffer(upload_size, usage).unwrap();
-            let mem_reqs = device.get_buffer_requirements(&buffer);
-
-            let upload_type = adapter
-                .memory_types
-                .iter()
-                .enumerate()
-                .position(|(id, mem_type)| {
-                    mem_reqs.type_mask & (1 << id) != 0
-                        && mem_type.properties.contains(m::Properties::CPU_VISIBLE)
-                })
-                .unwrap()
-                .into();
-
-            memory = device.allocate_memory(upload_type, mem_reqs.size).unwrap();
-            device.bind_buffer_memory(&memory, 0, &mut buffer).unwrap();
-            size = mem_reqs.size;
-
-            // copy image data into staging buffer
-            let mapping = device.map_memory(&memory, 0..size).unwrap();
-            for y in 0..height as usize {
-                let data_source_slice =
-                    &(**img)[y * (width as usize) * stride..(y + 1) * (width as usize) * stride];
-                ptr::copy_nonoverlapping(
-                    data_source_slice.as_ptr(),
-                    mapping.offset(y as isize * row_pitch as isize),
-                    data_source_slice.len(),
-                );
-            }
-            device.unmap_memory(&memory);
-        }
-
-        (
-            BufferState {
-                memory: Some(memory),
-                buffer: Some(buffer),
-                device: device_ptr,
-                size,
-            },
-            Dimensions { width, height },
-            row_pitch,
-            stride,
-        )
-    }
-}
-
-impl<B: Backend> Drop for BufferState<B> {
-    fn drop(&mut self) {
-        let device = &self.device.borrow().device;
-        unsafe {
-            device.destroy_buffer(self.buffer.take().unwrap());
-            device.free_memory(self.memory.take().unwrap());
-        }
-    }
-}
-
-struct Uniform<B: Backend> {
-    buffer: Option<BufferState<B>>,
-    desc: Option<DescSet<B>>,
-}
-
-impl<B: Backend> Uniform<B> {
-    unsafe fn new<T>(
-        device: Rc<RefCell<DeviceState<B>>>,
-        memory_types: &[MemoryType],
-        data: &[T],
-        mut desc: DescSet<B>,
-        binding: u32,
-    ) -> Self
-    where
-        T: Copy,
-    {
-        let buffer = BufferState::new(
-            Rc::clone(&device),
-            &data,
-            buffer::Usage::UNIFORM,
-            memory_types,
-        );
-        let buffer = Some(buffer);
-
-        desc.write_to_state(
-            vec![DescSetWrite {
-                binding,
-                array_offset: 0,
-                descriptors: Some(pso::Descriptor::Buffer(
-                    buffer.as_ref().unwrap().get_buffer(),
-                    None..None,
-                )),
-            }],
-            &mut device.borrow_mut().device,
-        );
-
-        Uniform {
-            buffer,
-            desc: Some(desc),
-        }
-    }
-
-    fn get_layout(&self) -> &B::DescriptorSetLayout {
-        self.desc.as_ref().unwrap().get_layout()
-    }
-}
-
-struct DescSetLayout<B: Backend> {
-    layout: Option<B::DescriptorSetLayout>,
-    device: Rc<RefCell<DeviceState<B>>>,
-}
-
-impl<B: Backend> DescSetLayout<B> {
-    unsafe fn new(
-        device: Rc<RefCell<DeviceState<B>>>,
-        bindings: Vec<pso::DescriptorSetLayoutBinding>,
-    ) -> Self {
-        let desc_set_layout = device
-            .borrow()
-            .device
-            .create_descriptor_set_layout(bindings, &[])
-            .ok();
-
-        DescSetLayout {
-            layout: desc_set_layout,
-            device,
-        }
-    }
-
-    unsafe fn create_desc_set(self, desc_pool: &mut B::DescriptorPool) -> DescSet<B> {
-        let desc_set = desc_pool
-            .allocate_set(self.layout.as_ref().unwrap())
-            .unwrap();
-        DescSet {
-            layout: self,
-            set: Some(desc_set),
-        }
-    }
-}
-
-impl<B: Backend> Drop for DescSetLayout<B> {
-    fn drop(&mut self) {
-        let device = &self.device.borrow().device;
-        unsafe {
-            device.destroy_descriptor_set_layout(self.layout.take().unwrap());
-        }
-    }
-}
-
-struct DescSet<B: Backend> {
-    set: Option<B::DescriptorSet>,
-    layout: DescSetLayout<B>,
-}
-
-struct DescSetWrite<W> {
-    binding: pso::DescriptorBinding,
-    array_offset: pso::DescriptorArrayIndex,
-    descriptors: W,
-}
-
-impl<B: Backend> DescSet<B> {
-    unsafe fn write_to_state<'a, 'b: 'a, W>(
-        &'b mut self,
-        write: Vec<DescSetWrite<W>>,
-        device: &mut B::Device,
-    ) where
-        W: IntoIterator,
-        W::Item: std::borrow::Borrow<pso::Descriptor<'a, B>>,
-    {
-        let set = self.set.as_ref().unwrap();
-        let write: Vec<_> = write
-            .into_iter()
-            .map(|d| pso::DescriptorSetWrite {
-                binding: d.binding,
-                array_offset: d.array_offset,
-                descriptors: d.descriptors,
-                set,
-            })
-            .collect();
-        device.write_descriptor_sets(write);
-    }
-
-    fn get_layout(&self) -> &B::DescriptorSetLayout {
-        self.layout.layout.as_ref().unwrap()
     }
 }
 
