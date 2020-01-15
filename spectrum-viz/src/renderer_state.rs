@@ -1,25 +1,34 @@
 extern crate gfx_hal as hal;
 
+use std::borrow;
 use std::cell::RefCell;
 use std::io::Cursor;
 use std::iter;
 use std::rc::Rc;
 use std::time::Instant;
 
-use hal::pso::{PipelineStage, ShaderStageFlags};
-use hal::{buffer, command, pool, prelude::*, pso, queue::Submission, window as w, Backend};
+use hal::buffer;
+use hal::command;
+use hal::format as f;
+use hal::image as i;
+use hal::pool;
+use hal::prelude::*;
+use hal::pso;
+use hal::pso::ShaderStageFlags;
+use hal::queue::Submission;
+use hal::window as w;
+use hal::Backend;
 
 use crate::backend_state::BackendState;
 use crate::buffer_state::BufferState;
 use crate::desc_set::DescSetLayout;
 use crate::device_state::DeviceState;
 use crate::framebuffer_state::FramebufferState;
-use crate::gx_constant::{ACTUAL_QUAD, QUAD, TRIANGLE};
+use crate::gx_constant::{ACTUAL_QUAD, DIMS, QUAD, TRIANGLE};
 use crate::gx_object::Vertex;
 use crate::image_state::ImageState;
 use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
-use crate::swapchain_state::SwapchainState;
 use crate::uniform::Uniform;
 
 pub struct RendererState<B: Backend> {
@@ -37,11 +46,54 @@ pub struct RendererState<B: Backend> {
     pipeline: PipelineState<B>,
     framebuffer: FramebufferState<B>,
     pub uniform: Uniform<B>,
-    swapchain: Option<SwapchainState<B>>,
     device: Rc<RefCell<DeviceState<B>>>,
 }
 
+fn create_viewport(extent: i::Extent) -> pso::Viewport {
+    pso::Viewport {
+        rect: pso::Rect {
+            x: 0,
+            y: 0,
+            w: extent.width as i16,
+            h: extent.height as i16,
+        },
+        depth: 0.0..1.0,
+    }
+}
+
 impl<B: Backend> RendererState<B> {
+    fn configure_swapchain(
+        backend: &mut BackendState<B>,
+        device: Rc<RefCell<DeviceState<B>>>,
+    ) -> (f::Format, i::Extent) {
+        let caps = backend
+            .surface
+            .capabilities(&device.borrow().physical_device);
+        let formats = backend
+            .surface
+            .supported_formats(&device.borrow().physical_device);
+        println!("formats: {:?}", formats);
+        let format = formats.map_or(f::Format::Rgba8Srgb, |formats| {
+            formats
+                .iter()
+                .find(|format| format.base_format().1 == f::ChannelType::Srgb)
+                .map(|format| *format)
+                .unwrap_or(formats[0])
+        });
+        println!("Surface format: {:?}", format);
+        let swap_config = w::SwapchainConfig::from_caps(&caps, format, DIMS);
+        println!("Swap config: {:?}", swap_config);
+        let extent = swap_config.extent.to_extent();
+        unsafe {
+            backend
+                .surface
+                .configure_swapchain(&device.borrow().device, swap_config)
+                .expect("Can't configure swapchain");
+        };
+
+        (format, extent)
+    }
+
     pub unsafe fn new(mut backend: BackendState<B>) -> Self {
         let device = Rc::new(RefCell::new(DeviceState::new(
             backend.adapter.adapter.take().unwrap(),
@@ -190,15 +242,11 @@ impl<B: Backend> RendererState<B> {
 
         device.borrow().device.destroy_command_pool(staging_pool);
 
-        let mut swapchain = Some(SwapchainState::new(&mut backend, Rc::clone(&device)));
+        let (format, extent) = RendererState::configure_swapchain(&mut backend, Rc::clone(&device));
 
-        let render_pass = RenderPassState::new(swapchain.as_ref().unwrap(), Rc::clone(&device));
+        let render_pass = RenderPassState::new(format, Rc::clone(&device));
 
-        let framebuffer = FramebufferState::new(
-            Rc::clone(&device),
-            &render_pass,
-            swapchain.as_mut().unwrap(),
-        );
+        let framebuffer = FramebufferState::new(Rc::clone(&device));
 
         let pipeline = PipelineState::new_triangle(
             vec![image.get_layout(), uniform.get_layout()],
@@ -206,7 +254,7 @@ impl<B: Backend> RendererState<B> {
             Rc::clone(&device),
         );
 
-        let viewport = RendererState::create_viewport(swapchain.as_ref().unwrap());
+        let viewport = create_viewport(extent);
 
         RendererState {
             backend,
@@ -220,7 +268,6 @@ impl<B: Backend> RendererState<B> {
             uniform,
             render_pass,
             pipeline,
-            swapchain,
             framebuffer,
             viewport,
             creation_instant: std::time::Instant::now(),
@@ -228,98 +275,57 @@ impl<B: Backend> RendererState<B> {
     }
 
     pub fn recreate_swapchain(&mut self) {
-        self.device.borrow().device.wait_idle().unwrap();
-
-        self.swapchain.take().unwrap();
-
-        self.swapchain =
-            Some(unsafe { SwapchainState::new(&mut self.backend, Rc::clone(&self.device)) });
-
-        self.render_pass = unsafe {
-            RenderPassState::new(self.swapchain.as_ref().unwrap(), Rc::clone(&self.device))
-        };
-
-        self.framebuffer = unsafe {
-            FramebufferState::new(
-                Rc::clone(&self.device),
-                &self.render_pass,
-                self.swapchain.as_mut().unwrap(),
-            )
-        };
-
-        self.pipeline = unsafe {
-            PipelineState::new_triangle(
-                vec![self.image.get_layout(), self.uniform.get_layout()],
-                self.render_pass.render_pass.as_ref().unwrap(),
-                Rc::clone(&self.device),
-            )
-        };
-
-        self.viewport = Self::create_viewport(self.swapchain.as_ref().unwrap());
-    }
-
-    fn create_viewport(swapchain: &SwapchainState<B>) -> pso::Viewport {
-        pso::Viewport {
-            rect: pso::Rect {
-                x: 0,
-                y: 0,
-                w: swapchain.extent.width as i16,
-                h: swapchain.extent.height as i16,
-            },
-            depth: 0.0..1.0,
-        }
+        let (_, extent) =
+            RendererState::configure_swapchain(&mut self.backend, Rc::clone(&self.device));
+        self.viewport = create_viewport(extent);
     }
 
     pub fn draw_triangle(&mut self, cr: f32, cg: f32, cb: f32) -> Result<(), &'static str> {
-        let sem_index = self.framebuffer.next_acq_pre_pair_index();
-
-        let frame: w::SwapImageIndex = unsafe {
-            let (acquire_semaphore, _) = self
-                .framebuffer
-                .get_frame_data(None, Some(sem_index))
-                .1
-                .unwrap();
-            match self
-                .swapchain
-                .as_mut()
-                .unwrap()
-                .swapchain
-                .as_mut()
-                .unwrap()
-                .acquire_image(!0, Some(acquire_semaphore), None)
-            {
-                Ok((i, _)) => Ok(i),
-                Err(_) => Err("Couldn't find frame"),
-            }?
+        let surface_image = unsafe {
+            match self.backend.surface.acquire_image(!0) {
+                Ok((image, _)) => image,
+                Err(_) => {
+                    self.recreate_swapchain();
+                    return Ok(());
+                }
+            }
         };
+
+        let framebuffer = unsafe {
+            self.device
+                .borrow()
+                .device
+                .create_framebuffer(
+                    self.render_pass.render_pass.as_ref().unwrap(),
+                    iter::once(borrow::Borrow::borrow(&surface_image)),
+                    i::Extent {
+                        width: DIMS.width,
+                        height: DIMS.height,
+                        depth: 1,
+                    },
+                )
+                .unwrap()
+        };
+
+        let (command_pool, cmd_buffer, present_fence, present_semaphore) =
+            self.framebuffer.next_frame_info();
 
         let duration = std::time::Instant::now().duration_since(self.creation_instant);
         let time_f32 = duration.as_secs() as f32 + duration.subsec_nanos() as f32 * 1e-9;
 
-        let (fid, sid) = self
-            .framebuffer
-            .get_frame_data(Some(frame as usize), Some(sem_index));
-
-        let (framebuffer_fence, framebuffer, command_pool, command_buffers) = fid.unwrap();
-        let (image_acquired, image_present) = sid.unwrap();
         unsafe {
             self.device
                 .borrow()
                 .device
-                .wait_for_fence(framebuffer_fence, !0)
+                .wait_for_fence(present_fence, !0)
                 .unwrap();
             self.device
                 .borrow()
                 .device
-                .reset_fence(framebuffer_fence)
+                .reset_fence(present_fence)
                 .unwrap();
             command_pool.reset(false);
 
-            // Rendering
-            let mut cmd_buffer = match command_buffers.pop() {
-                Some(cmd_buffer) => cmd_buffer,
-                None => command_pool.allocate_one(command::Level::Primary),
-            };
             cmd_buffer.begin_primary(command::CommandBufferFlags::ONE_TIME_SUBMIT);
             cmd_buffer.set_viewports(0, &[self.viewport.clone()]);
             cmd_buffer.set_scissors(0, &[self.viewport.rect]);
@@ -358,136 +364,24 @@ impl<B: Backend> RendererState<B> {
 
             let submission = Submission {
                 command_buffers: iter::once(&cmd_buffer),
-                wait_semaphores: iter::once((&*image_acquired, PipelineStage::BOTTOM_OF_PIPE)),
-                signal_semaphores: iter::once(&*image_present),
+                wait_semaphores: None,
+                signal_semaphores: iter::once(&*present_semaphore),
             };
 
-            self.device.borrow_mut().queues.queues[0].submit(submission, Some(framebuffer_fence));
-            command_buffers.push(cmd_buffer);
-
-            // present frame
-            match self
-                .swapchain
-                .as_ref()
-                .unwrap()
-                .swapchain
-                .as_ref()
-                .unwrap()
-                .present(
-                    &mut self.device.borrow_mut().queues.queues[0],
-                    frame,
-                    Some(&*image_present),
-                ) {
-                Ok(_) => Ok(()),
-                Err(_) => Err("Failed to present"),
-            }
-        }
-    }
-
-    fn draw_rust_logo(&mut self, cr: f32, cg: f32, cb: f32) -> Result<(), &'static str> {
-        let sem_index = self.framebuffer.next_acq_pre_pair_index();
-
-        let frame: w::SwapImageIndex = unsafe {
-            let (acquire_semaphore, _) = self
-                .framebuffer
-                .get_frame_data(None, Some(sem_index))
-                .1
-                .unwrap();
-            match self
-                .swapchain
-                .as_mut()
-                .unwrap()
-                .swapchain
-                .as_mut()
-                .unwrap()
-                .acquire_image(!0, Some(acquire_semaphore), None)
-            {
-                Ok((i, _)) => Ok(i),
-                Err(_) => Err("Couldn't find frame"),
-            }?
-        };
-
-        let (fid, sid) = self
-            .framebuffer
-            .get_frame_data(Some(frame as usize), Some(sem_index));
-
-        let (framebuffer_fence, framebuffer, command_pool, command_buffers) = fid.unwrap();
-        let (image_acquired, image_present) = sid.unwrap();
-
-        unsafe {
-            self.device
-                .borrow()
-                .device
-                .wait_for_fence(framebuffer_fence, !0)
-                .unwrap();
-            self.device
-                .borrow()
-                .device
-                .reset_fence(framebuffer_fence)
-                .unwrap();
-            command_pool.reset(false);
-
-            // Rendering
-            let mut cmd_buffer = match command_buffers.pop() {
-                Some(cmd_buffer) => cmd_buffer,
-                None => command_pool.allocate_one(command::Level::Primary),
-            };
-            cmd_buffer.begin_primary(command::CommandBufferFlags::ONE_TIME_SUBMIT);
-
-            cmd_buffer.set_viewports(0, &[self.viewport.clone()]);
-            cmd_buffer.set_scissors(0, &[self.viewport.rect]);
-            cmd_buffer.bind_graphics_pipeline(self.pipeline.pipeline.as_ref().unwrap());
-            cmd_buffer.bind_vertex_buffers(0, Some((self.vertex_buffer.get_buffer(), 0)));
-            cmd_buffer.bind_graphics_descriptor_sets(
-                self.pipeline.pipeline_layout.as_ref().unwrap(),
-                0,
-                vec![
-                    self.image.desc.set.as_ref().unwrap(),
-                    self.uniform.desc.as_ref().unwrap().set.as_ref().unwrap(),
-                ],
-                &[],
+            self.device.borrow_mut().queues.queues[0].submit(submission, Some(present_fence));
+            let result = self.device.borrow_mut().queues.queues[0].present_surface(
+                &mut self.backend.surface,
+                surface_image,
+                Some(present_semaphore),
             );
 
-            cmd_buffer.begin_render_pass(
-                self.render_pass.render_pass.as_ref().unwrap(),
-                &framebuffer,
-                self.viewport.rect,
-                &[command::ClearValue {
-                    color: command::ClearColor {
-                        float32: [cr, cg, cb, 1.0],
-                    },
-                }],
-                command::SubpassContents::Inline,
-            );
-            cmd_buffer.draw(0..6, 0..1);
-            cmd_buffer.end_render_pass();
-            cmd_buffer.finish();
+            self.device.borrow().device.destroy_framebuffer(framebuffer);
 
-            let submission = Submission {
-                command_buffers: iter::once(&cmd_buffer),
-                wait_semaphores: iter::once((&*image_acquired, PipelineStage::BOTTOM_OF_PIPE)),
-                signal_semaphores: iter::once(&*image_present),
-            };
-
-            self.device.borrow_mut().queues.queues[0].submit(submission, Some(framebuffer_fence));
-            command_buffers.push(cmd_buffer);
-
-            // present frame
-            match self
-                .swapchain
-                .as_ref()
-                .unwrap()
-                .swapchain
-                .as_ref()
-                .unwrap()
-                .present(
-                    &mut self.device.borrow_mut().queues.queues[0],
-                    frame,
-                    Some(&*image_present),
-                ) {
-                Ok(_) => Ok(()),
-                Err(_) => Err("Failed to present"),
+            if let Err(e) = result {
+                println!("Error when presenting: {}", e);
+                self.recreate_swapchain();
             }
+            Ok(())
         }
     }
 }
@@ -504,7 +398,9 @@ impl<B: Backend> Drop for RendererState<B> {
                 .borrow()
                 .device
                 .destroy_descriptor_pool(self.uniform_desc_pool.take().unwrap());
-            self.swapchain.take();
+            self.backend
+                .surface
+                .unconfigure_swapchain(&self.device.borrow().device);
         }
     }
 }

@@ -10,5 +10,4 @@ pub mod image_state;
 pub mod pipeline_state;
 pub mod render_pass_state;
 pub mod renderer_state;
-pub mod swapchain_state;
 pub mod uniform;

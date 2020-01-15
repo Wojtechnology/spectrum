@@ -3,13 +3,13 @@ extern crate gfx_hal as hal;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use hal::format as f;
 use hal::image as i;
 use hal::pass;
 use hal::prelude::*;
 use hal::Backend;
 
 use crate::device_state::DeviceState;
-use crate::swapchain_state::SwapchainState;
 
 pub struct RenderPassState<B: Backend> {
     pub render_pass: Option<B::RenderPass>,
@@ -17,10 +17,10 @@ pub struct RenderPassState<B: Backend> {
 }
 
 impl<B: Backend> RenderPassState<B> {
-    pub unsafe fn new(swapchain: &SwapchainState<B>, device: Rc<RefCell<DeviceState<B>>>) -> Self {
+    pub unsafe fn new(format: f::Format, device: Rc<RefCell<DeviceState<B>>>) -> Self {
         let render_pass = {
             let attachment = pass::Attachment {
-                format: Some(swapchain.format.clone()),
+                format: Some(format),
                 samples: 1,
                 ops: pass::AttachmentOps::new(
                     pass::AttachmentLoadOp::Clear,

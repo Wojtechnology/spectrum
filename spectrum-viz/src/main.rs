@@ -36,7 +36,7 @@ fn main() {
 
     let event_loop = winit::event_loop::EventLoop::new();
     let wb = winit::window::WindowBuilder::new()
-        .with_min_inner_size(winit::dpi::LogicalSize::new(1.0, 1.0))
+        .with_min_inner_size(winit::dpi::LogicalSize::new(64.0, 64.0))
         .with_inner_size(winit::dpi::LogicalSize::new(
             DIMS.width as _,
             DIMS.height as _,
