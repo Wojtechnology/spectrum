@@ -274,19 +274,19 @@ impl<B: Backend> RendererState<B> {
         }
     }
 
-    pub fn recreate_swapchain(&mut self) {
+    fn recreate_swapchain(&mut self) {
         let (_, extent) =
             RendererState::configure_swapchain(&mut self.backend, Rc::clone(&self.device));
         self.viewport = create_viewport(extent);
     }
 
-    pub fn draw_triangle(&mut self, cr: f32, cg: f32, cb: f32) -> Result<(), &'static str> {
+    pub fn draw_triangle(&mut self, cr: f32, cg: f32, cb: f32) {
         let surface_image = unsafe {
             match self.backend.surface.acquire_image(!0) {
                 Ok((image, _)) => image,
                 Err(_) => {
                     self.recreate_swapchain();
-                    return Ok(());
+                    return;
                 }
             }
         };
@@ -381,7 +381,6 @@ impl<B: Backend> RendererState<B> {
                 println!("Error when presenting: {}", e);
                 self.recreate_swapchain();
             }
-            Ok(())
         }
     }
 }

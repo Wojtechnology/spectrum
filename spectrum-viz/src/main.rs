@@ -45,7 +45,6 @@ fn main() {
     let backend = create_backend(wb, &event_loop);
 
     let mut renderer_state = unsafe { RendererState::new(backend) };
-    let mut recreate_swapchain = false;
 
     let mut r = 1.0f32;
     let mut g = 1.0f32;
@@ -71,14 +70,7 @@ fn main() {
         cur_color, cur_value
     );
 
-    match renderer_state.draw_triangle(cr, cg, cb) {
-        Ok(()) => (),
-        Err(_) => {
-            recreate_swapchain = true;
-        }
-    }
-
-    let mut frame_num: u64 = 0;
+    renderer_state.draw_triangle(cr, cg, cb);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -100,24 +92,8 @@ fn main() {
                     | winit::event::WindowEvent::CloseRequested => {
                         *control_flow = winit::event_loop::ControlFlow::Exit
                     }
-                    winit::event::WindowEvent::Resized(dims) => {
-                        recreate_swapchain = true;
-                    }
                     winit::event::WindowEvent::RedrawRequested => {
-                        if recreate_swapchain {
-                            renderer_state.recreate_swapchain();
-                            recreate_swapchain = false;
-                        }
-
-                        frame_num += 1;
-                        println!("Frame num {} rendering!", frame_num);
-                        match renderer_state.draw_triangle(cr, cg, cb) {
-                            Ok(()) => (),
-                            Err(e) => {
-                                println!("Error: {}, recreating swapchain", e);
-                                recreate_swapchain = true;
-                            }
-                        }
+                        renderer_state.draw_triangle(cr, cg, cb);
                     }
                     winit::event::WindowEvent::KeyboardInput {
                         input:
@@ -223,7 +199,6 @@ fn main() {
             }
             winit::event::Event::EventsCleared => {
                 renderer_state.backend.window.request_redraw();
-                println!("EventsCleared");
             }
             _ => (),
         };
