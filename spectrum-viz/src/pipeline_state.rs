@@ -42,7 +42,7 @@ pub struct PipelineState<B: Backend> {
 }
 
 impl<B: Backend> PipelineState<B> {
-    pub unsafe fn new_triangle<IS>(
+    pub unsafe fn new<IS>(
         desc_layouts: IS,
         render_pass: &B::RenderPass,
         device_ptr: Rc<RefCell<DeviceState<B>>>,

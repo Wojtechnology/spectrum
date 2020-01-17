@@ -2,15 +2,8 @@ extern crate gfx_hal as hal;
 
 use hal::format as f;
 use hal::image as i;
-use hal::window as w;
 
 use crate::gx_object::{Quad, Vertex};
-
-// TODO: Move into another constants file
-pub const DIMS: w::Extent2D = w::Extent2D {
-    width: 1024,
-    height: 768,
-};
 
 pub const COLOR_RANGE: i::SubresourceRange = i::SubresourceRange {
     aspects: f::Aspects::COLOR,

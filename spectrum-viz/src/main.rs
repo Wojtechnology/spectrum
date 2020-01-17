@@ -19,8 +19,8 @@ extern crate image;
 extern crate winit;
 
 use spectrum_viz::backend_state::create_backend;
-use spectrum_viz::gx_constant::DIMS;
 use spectrum_viz::renderer_state::RendererState;
+use spectrum_viz::screen_size_state::ScreenSizeState;
 
 #[derive(Debug)]
 enum Color {
@@ -35,12 +35,11 @@ fn main() {
     env_logger::init();
 
     let event_loop = winit::event_loop::EventLoop::new();
+    let min_screen_state = ScreenSizeState::new_default_min();
+    let start_screen_state = ScreenSizeState::new_default_start();
     let wb = winit::window::WindowBuilder::new()
-        .with_min_inner_size(winit::dpi::LogicalSize::new(64.0, 64.0))
-        .with_inner_size(winit::dpi::LogicalSize::new(
-            DIMS.width as _,
-            DIMS.height as _,
-        ))
+        .with_min_inner_size(min_screen_state.logical_size())
+        .with_inner_size(start_screen_state.logical_size())
         .with_title("colour-uniform".to_string());
     let backend = create_backend(wb, &event_loop);
 
@@ -91,6 +90,12 @@ fn main() {
                     }
                     | winit::event::WindowEvent::CloseRequested => {
                         *control_flow = winit::event_loop::ControlFlow::Exit
+                    }
+                    winit::event::WindowEvent::Resized(size) => {
+                        renderer_state.resize(size);
+                    }
+                    winit::event::WindowEvent::HiDpiFactorChanged(dpi_factor) => {
+                        renderer_state.change_dpi(dpi_factor);
                     }
                     winit::event::WindowEvent::RedrawRequested => {
                         renderer_state.draw_triangle(cr, cg, cb);

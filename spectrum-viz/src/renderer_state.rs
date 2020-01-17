@@ -2,7 +2,6 @@ extern crate gfx_hal as hal;
 
 use std::borrow;
 use std::cell::RefCell;
-use std::io::Cursor;
 use std::iter;
 use std::rc::Rc;
 use std::time::Instant;
@@ -11,39 +10,38 @@ use hal::buffer;
 use hal::command;
 use hal::format as f;
 use hal::image as i;
-use hal::pool;
 use hal::prelude::*;
 use hal::pso;
 use hal::pso::ShaderStageFlags;
 use hal::queue::Submission;
 use hal::window as w;
 use hal::Backend;
+use winit::dpi::LogicalSize;
 
 use crate::backend_state::BackendState;
 use crate::buffer_state::BufferState;
 use crate::desc_set::DescSetLayout;
 use crate::device_state::DeviceState;
 use crate::framebuffer_state::FramebufferState;
-use crate::gx_constant::{DIMS, TRIANGLE};
-use crate::image_state::ImageState;
+use crate::gx_constant::TRIANGLE;
 use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
+use crate::screen_size_state::ScreenSizeState;
 use crate::uniform::Uniform;
 
 pub struct RendererState<B: Backend> {
     uniform_desc_pool: Option<B::DescriptorPool>,
-    img_desc_pool: Option<B::DescriptorPool>,
     pub viewport: pso::Viewport,
     creation_instant: Instant,
     // Locally defined data
     pub backend: BackendState<B>,
     render_pass: RenderPassState<B>,
     triangle_vertex_buffer: BufferState<B>,
-    image: ImageState<B>,
     pipeline: PipelineState<B>,
     framebuffer: FramebufferState<B>,
     pub uniform: Uniform<B>,
     device: Rc<RefCell<DeviceState<B>>>,
+    screen_size_state: ScreenSizeState,
 }
 
 fn create_viewport(extent: i::Extent) -> pso::Viewport {
@@ -62,6 +60,7 @@ impl<B: Backend> RendererState<B> {
     fn configure_swapchain(
         backend: &mut BackendState<B>,
         device: Rc<RefCell<DeviceState<B>>>,
+        screen_size_state: &ScreenSizeState,
     ) -> (f::Format, i::Extent) {
         let caps = backend
             .surface
@@ -78,7 +77,8 @@ impl<B: Backend> RendererState<B> {
                 .unwrap_or(formats[0])
         });
         println!("Surface format: {:?}", format);
-        let swap_config = w::SwapchainConfig::from_caps(&caps, format, DIMS);
+        let swap_config =
+            w::SwapchainConfig::from_caps(&caps, format, screen_size_state.extent_2d());
         println!("Swap config: {:?}", swap_config);
         let extent = swap_config.extent.to_extent();
         unsafe {
@@ -97,30 +97,6 @@ impl<B: Backend> RendererState<B> {
             &backend.surface,
         )));
 
-        let image_desc = DescSetLayout::new(
-            Rc::clone(&device),
-            vec![
-                pso::DescriptorSetLayoutBinding {
-                    binding: 0,
-                    ty: pso::DescriptorType::Image {
-                        ty: pso::ImageDescriptorType::Sampled {
-                            with_sampler: false,
-                        },
-                    },
-                    count: 1,
-                    stage_flags: ShaderStageFlags::FRAGMENT,
-                    immutable_samplers: false,
-                },
-                pso::DescriptorSetLayoutBinding {
-                    binding: 1,
-                    ty: pso::DescriptorType::Sampler,
-                    count: 1,
-                    stage_flags: ShaderStageFlags::FRAGMENT,
-                    immutable_samplers: false,
-                },
-            ],
-        );
-
         let uniform_desc = DescSetLayout::new(
             Rc::clone(&device),
             vec![pso::DescriptorSetLayoutBinding {
@@ -136,29 +112,6 @@ impl<B: Backend> RendererState<B> {
                 immutable_samplers: false,
             }],
         );
-
-        let mut img_desc_pool = device
-            .borrow()
-            .device
-            .create_descriptor_pool(
-                1, // # of sets
-                &[
-                    pso::DescriptorRangeDesc {
-                        ty: pso::DescriptorType::Image {
-                            ty: pso::ImageDescriptorType::Sampled {
-                                with_sampler: false,
-                            },
-                        },
-                        count: 1,
-                    },
-                    pso::DescriptorRangeDesc {
-                        ty: pso::DescriptorType::Sampler,
-                        count: 1,
-                    },
-                ],
-                pso::DescriptorPoolCreateFlags::empty(),
-            )
-            .ok();
 
         let mut uniform_desc_pool = device
             .borrow()
@@ -178,33 +131,9 @@ impl<B: Backend> RendererState<B> {
             )
             .ok();
 
-        let image_desc = image_desc.create_desc_set(img_desc_pool.as_mut().unwrap());
         let uniform_desc = uniform_desc.create_desc_set(uniform_desc_pool.as_mut().unwrap());
 
         println!("Memory types: {:?}", backend.adapter.memory_types);
-
-        const IMAGE_LOGO: &'static [u8] = include_bytes!("data/logo.png");
-        let img = image::load(Cursor::new(&IMAGE_LOGO[..]), image::PNG)
-            .unwrap()
-            .to_rgba();
-
-        let mut staging_pool = device
-            .borrow()
-            .device
-            .create_command_pool(
-                device.borrow().queues.family,
-                pool::CommandPoolCreateFlags::empty(),
-            )
-            .expect("Can't create staging command pool");
-
-        let image = ImageState::new(
-            image_desc,
-            &img,
-            &backend.adapter,
-            buffer::Usage::TRANSFER_SRC,
-            &mut device.borrow_mut(),
-            &mut staging_pool,
-        );
 
         let triangle_vertex_buffer = BufferState::new::<[f32; 5]>(
             Rc::clone(&device),
@@ -221,18 +150,16 @@ impl<B: Backend> RendererState<B> {
             0,
         );
 
-        image.wait_for_transfer_completion();
-
-        device.borrow().device.destroy_command_pool(staging_pool);
-
-        let (format, extent) = RendererState::configure_swapchain(&mut backend, Rc::clone(&device));
+        let screen_size_state = ScreenSizeState::new_default_start();
+        let (format, extent) =
+            Self::configure_swapchain(&mut backend, Rc::clone(&device), &screen_size_state);
 
         let render_pass = RenderPassState::new(format, Rc::clone(&device));
 
         let framebuffer = FramebufferState::new(Rc::clone(&device));
 
-        let pipeline = PipelineState::new_triangle(
-            vec![image.get_layout(), uniform.get_layout()],
+        let pipeline = PipelineState::new(
+            vec![uniform.get_layout()],
             render_pass.render_pass.as_ref().unwrap(),
             Rc::clone(&device),
         );
@@ -242,8 +169,6 @@ impl<B: Backend> RendererState<B> {
         RendererState {
             backend,
             device,
-            image,
-            img_desc_pool,
             uniform_desc_pool,
             triangle_vertex_buffer,
             uniform,
@@ -252,12 +177,16 @@ impl<B: Backend> RendererState<B> {
             framebuffer,
             viewport,
             creation_instant: std::time::Instant::now(),
+            screen_size_state,
         }
     }
 
     fn recreate_swapchain(&mut self) {
-        let (_, extent) =
-            RendererState::configure_swapchain(&mut self.backend, Rc::clone(&self.device));
+        let (_, extent) = Self::configure_swapchain(
+            &mut self.backend,
+            Rc::clone(&self.device),
+            &self.screen_size_state,
+        );
         self.viewport = create_viewport(extent);
     }
 
@@ -279,11 +208,7 @@ impl<B: Backend> RendererState<B> {
                 .create_framebuffer(
                     self.render_pass.render_pass.as_ref().unwrap(),
                     iter::once(borrow::Borrow::borrow(&surface_image)),
-                    i::Extent {
-                        width: DIMS.width,
-                        height: DIMS.height,
-                        depth: 1,
-                    },
+                    self.screen_size_state.extent(),
                 )
                 .unwrap()
         };
@@ -321,12 +246,9 @@ impl<B: Backend> RendererState<B> {
             cmd_buffer.bind_graphics_descriptor_sets(
                 self.pipeline.pipeline_layout.as_ref().unwrap(),
                 0,
-                vec![
-                    self.image.desc.set.as_ref().unwrap(),
-                    self.uniform.desc.as_ref().unwrap().set.as_ref().unwrap(),
-                ],
+                vec![self.uniform.desc.as_ref().unwrap().set.as_ref().unwrap()],
                 &[],
-            ); //TODO
+            );
 
             cmd_buffer.begin_render_pass(
                 self.render_pass.render_pass.as_ref().unwrap(),
@@ -364,16 +286,22 @@ impl<B: Backend> RendererState<B> {
             }
         }
     }
+
+    pub fn resize(&mut self, size: LogicalSize) {
+        self.screen_size_state.set_size(size);
+        self.recreate_swapchain();
+    }
+
+    pub fn change_dpi(&mut self, dpi_factor: f64) {
+        self.screen_size_state.set_dpi_factor(dpi_factor);
+        self.recreate_swapchain();
+    }
 }
 
 impl<B: Backend> Drop for RendererState<B> {
     fn drop(&mut self) {
         self.device.borrow().device.wait_idle().unwrap();
         unsafe {
-            self.device
-                .borrow()
-                .device
-                .destroy_descriptor_pool(self.img_desc_pool.take().unwrap());
             self.device
                 .borrow()
                 .device
