@@ -24,8 +24,7 @@ use crate::buffer_state::BufferState;
 use crate::desc_set::DescSetLayout;
 use crate::device_state::DeviceState;
 use crate::framebuffer_state::FramebufferState;
-use crate::gx_constant::{ACTUAL_QUAD, DIMS, QUAD, TRIANGLE};
-use crate::gx_object::Vertex;
+use crate::gx_constant::{DIMS, TRIANGLE};
 use crate::image_state::ImageState;
 use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
@@ -39,9 +38,7 @@ pub struct RendererState<B: Backend> {
     // Locally defined data
     pub backend: BackendState<B>,
     render_pass: RenderPassState<B>,
-    vertex_buffer: BufferState<B>,
     triangle_vertex_buffer: BufferState<B>,
-    quad_vertex_buffer: BufferState<B>,
     image: ImageState<B>,
     pipeline: PipelineState<B>,
     framebuffer: FramebufferState<B>,
@@ -209,23 +206,9 @@ impl<B: Backend> RendererState<B> {
             &mut staging_pool,
         );
 
-        let quad_vertex_buffer = BufferState::new::<f32>(
-            Rc::clone(&device),
-            &ACTUAL_QUAD.vertex_attributes(),
-            buffer::Usage::VERTEX,
-            &backend.adapter.memory_types,
-        );
-
         let triangle_vertex_buffer = BufferState::new::<[f32; 5]>(
             Rc::clone(&device),
             &TRIANGLE,
-            buffer::Usage::VERTEX,
-            &backend.adapter.memory_types,
-        );
-
-        let vertex_buffer = BufferState::new::<Vertex>(
-            Rc::clone(&device),
-            &QUAD,
             buffer::Usage::VERTEX,
             &backend.adapter.memory_types,
         );
@@ -262,9 +245,7 @@ impl<B: Backend> RendererState<B> {
             image,
             img_desc_pool,
             uniform_desc_pool,
-            vertex_buffer,
             triangle_vertex_buffer,
-            quad_vertex_buffer,
             uniform,
             render_pass,
             pipeline,

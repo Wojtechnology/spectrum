@@ -13,7 +13,6 @@ use hal::pso::{ShaderStageFlags, VertexInputRate};
 use hal::Backend;
 
 use crate::device_state::DeviceState;
-use crate::gx_object::Vertex;
 
 const ENTRY_NAME: &str = "main";
 
@@ -139,109 +138,6 @@ impl<B: Backend> PipelineState<B> {
 
             pipeline.unwrap()
         };
-        PipelineState {
-            pipeline: Some(pipeline),
-            pipeline_layout: Some(pipeline_layout),
-            device: Rc::clone(&device_ptr),
-        }
-    }
-
-    pub unsafe fn new<IS>(
-        desc_layouts: IS,
-        render_pass: &B::RenderPass,
-        device_ptr: Rc<RefCell<DeviceState<B>>>,
-    ) -> Self
-    where
-        IS: IntoIterator,
-        IS::Item: std::borrow::Borrow<B::DescriptorSetLayout>,
-    {
-        let device = &device_ptr.borrow().device;
-        let pipeline_layout = device
-            .create_pipeline_layout(desc_layouts, &[(pso::ShaderStageFlags::VERTEX, 0..8)])
-            .expect("Can't create pipeline layout");
-
-        let pipeline = {
-            let vs_module = read_shader_file::<B>(
-                device,
-                "src/data/quad.vert",
-                glsl_to_spirv::ShaderType::Vertex,
-            );
-            let fs_module = read_shader_file::<B>(
-                device,
-                "src/data/quad.frag",
-                glsl_to_spirv::ShaderType::Fragment,
-            );
-
-            let pipeline = {
-                let (vs_entry, fs_entry) = (
-                    pso::EntryPoint::<B> {
-                        entry: ENTRY_NAME,
-                        module: &vs_module,
-                        specialization: hal::spec_const_list![0.8f32],
-                    },
-                    pso::EntryPoint::<B> {
-                        entry: ENTRY_NAME,
-                        module: &fs_module,
-                        specialization: pso::Specialization::default(),
-                    },
-                );
-
-                let shader_entries = pso::GraphicsShaderSet {
-                    vertex: vs_entry,
-                    hull: None,
-                    domain: None,
-                    geometry: None,
-                    fragment: Some(fs_entry),
-                };
-
-                let subpass = Subpass {
-                    index: 0,
-                    main_pass: render_pass,
-                };
-
-                let mut pipeline_desc = pso::GraphicsPipelineDesc::new(
-                    shader_entries,
-                    pso::Primitive::TriangleList,
-                    pso::Rasterizer::FILL,
-                    &pipeline_layout,
-                    subpass,
-                );
-                pipeline_desc.blender.targets.push(pso::ColorBlendDesc {
-                    mask: pso::ColorMask::ALL,
-                    blend: Some(pso::BlendState::ALPHA),
-                });
-                pipeline_desc.vertex_buffers.push(pso::VertexBufferDesc {
-                    binding: 0,
-                    stride: size_of::<Vertex>() as u32,
-                    rate: VertexInputRate::Vertex,
-                });
-
-                pipeline_desc.attributes.push(pso::AttributeDesc {
-                    location: 0,
-                    binding: 0,
-                    element: pso::Element {
-                        format: f::Format::Rg32Sfloat,
-                        offset: 0,
-                    },
-                });
-                pipeline_desc.attributes.push(pso::AttributeDesc {
-                    location: 1,
-                    binding: 0,
-                    element: pso::Element {
-                        format: f::Format::Rg32Sfloat,
-                        offset: 8,
-                    },
-                });
-
-                device.create_graphics_pipeline(&pipeline_desc, None)
-            };
-
-            device.destroy_shader_module(vs_module);
-            device.destroy_shader_module(fs_module);
-
-            pipeline.unwrap()
-        };
-
         PipelineState {
             pipeline: Some(pipeline),
             pipeline_layout: Some(pipeline_layout),
