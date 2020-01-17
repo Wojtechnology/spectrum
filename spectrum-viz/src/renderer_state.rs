@@ -16,7 +16,7 @@ use hal::pso::ShaderStageFlags;
 use hal::queue::Submission;
 use hal::window as w;
 use hal::Backend;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalPosition, LogicalSize};
 
 use crate::backend_state::BackendState;
 use crate::buffer_state::BufferState;
@@ -28,6 +28,34 @@ use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
 use crate::screen_size_state::ScreenSizeState;
 use crate::uniform::Uniform;
+
+// TODO: Move into own module
+#[derive(Copy, Clone)]
+pub struct Color<N> {
+    pub r: N,
+    pub g: N,
+    pub b: N,
+}
+
+// TODO: Move into own module
+#[derive(Copy, Clone)]
+pub struct UserState {
+    pub cursor_pos: LogicalPosition,
+    pub clear_color: Color<f32>,
+}
+
+impl UserState {
+    pub fn new() -> Self {
+        UserState {
+            cursor_pos: LogicalPosition::new(0.0, 0.0),
+            clear_color: Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+            },
+        }
+    }
+}
 
 pub struct RendererState<B: Backend> {
     uniform_desc_pool: Option<B::DescriptorPool>,
@@ -190,7 +218,7 @@ impl<B: Backend> RendererState<B> {
         self.viewport = create_viewport(extent);
     }
 
-    pub fn draw_triangle(&mut self, cr: f32, cg: f32, cb: f32) {
+    pub fn draw(&mut self, user_state: UserState) {
         let surface_image = unsafe {
             match self.backend.surface.acquire_image(!0) {
                 Ok((image, _)) => image,
@@ -256,7 +284,12 @@ impl<B: Backend> RendererState<B> {
                 self.viewport.rect,
                 &[command::ClearValue {
                     color: command::ClearColor {
-                        float32: [cr, cg, cb, 1.0],
+                        float32: [
+                            user_state.clear_color.r,
+                            user_state.clear_color.g,
+                            user_state.clear_color.b,
+                            1.0,
+                        ],
                     },
                 }],
                 command::SubpassContents::Inline,

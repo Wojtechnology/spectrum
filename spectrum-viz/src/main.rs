@@ -18,7 +18,7 @@ extern crate log;
 extern crate winit;
 
 use spectrum_viz::backend_state::create_backend;
-use spectrum_viz::renderer_state::RendererState;
+use spectrum_viz::renderer_state::{RendererState, UserState};
 use spectrum_viz::screen_size_state::ScreenSizeState;
 
 fn init() -> (
@@ -43,18 +43,12 @@ fn init() -> (
 #[cfg(any(feature = "vulkan", feature = "metal",))]
 fn main() {
     let (event_loop, mut renderer_state) = init();
+    let mut user_state = UserState::new();
 
-    let cr = 0.8;
-    let cg = 0.8;
-    let cb = 0.8;
-    let mut x = 0.5;
-    let mut y = 0.5;
-
-    renderer_state.draw_triangle(cr, cg, cb);
+    renderer_state.draw(user_state);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Poll;
-        let viewport = &mut renderer_state.viewport;
         match event {
             winit::event::Event::WindowEvent { event, .. } => match event {
                 winit::event::WindowEvent::KeyboardInput {
@@ -75,11 +69,10 @@ fn main() {
                     renderer_state.change_dpi(dpi_factor);
                 }
                 winit::event::WindowEvent::RedrawRequested => {
-                    renderer_state.draw_triangle(cr, cg, cb);
+                    renderer_state.draw(user_state);
                 }
                 winit::event::WindowEvent::CursorMoved { position, .. } => {
-                    x = (position.x as f32) / (viewport.rect.w as f32) * 4.0 - 1.0;
-                    y = (position.y as f32) / (viewport.rect.h as f32) * 4.0 - 1.0;
+                    user_state.cursor_pos = position;
                 }
                 _ => (),
             },
