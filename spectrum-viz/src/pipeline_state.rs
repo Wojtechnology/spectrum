@@ -52,7 +52,10 @@ impl<B: Backend> PipelineState<B> {
         IS::Item: std::borrow::Borrow<B::DescriptorSetLayout>,
     {
         let device = &device_ptr.borrow().device;
-        let push_constants = vec![(ShaderStageFlags::FRAGMENT, 0..4)];
+        let push_constants = vec![
+            (ShaderStageFlags::FRAGMENT, 0..4),
+            (ShaderStageFlags::VERTEX, 0..4),
+        ];
         let pipeline_layout = device
             .create_pipeline_layout(desc_layouts, push_constants)
             .expect("Can't create pipeline layout");

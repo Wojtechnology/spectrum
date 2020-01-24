@@ -20,14 +20,12 @@ use winit::dpi::{LogicalPosition, LogicalSize};
 
 use crate::backend_state::BackendState;
 use crate::buffer_state::BufferState;
-use crate::desc_set::DescSetLayout;
 use crate::device_state::DeviceState;
 use crate::framebuffer_state::FramebufferState;
 use crate::gx_constant::TRIANGLE;
 use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
 use crate::screen_size_state::ScreenSizeState;
-use crate::uniform::Uniform;
 
 // TODO: Move into own module
 #[derive(Copy, Clone)]
@@ -58,7 +56,6 @@ impl UserState {
 }
 
 pub struct RendererState<B: Backend> {
-    uniform_desc_pool: Option<B::DescriptorPool>,
     pub viewport: pso::Viewport,
     creation_instant: Instant,
     // Locally defined data
@@ -67,7 +64,6 @@ pub struct RendererState<B: Backend> {
     triangle_vertex_buffer: BufferState<B>,
     pipeline: PipelineState<B>,
     framebuffer: FramebufferState<B>,
-    pub uniform: Uniform<B>,
     device: Rc<RefCell<DeviceState<B>>>,
     screen_size_state: ScreenSizeState,
 }
@@ -125,42 +121,6 @@ impl<B: Backend> RendererState<B> {
             &backend.surface,
         )));
 
-        let uniform_desc = DescSetLayout::new(
-            Rc::clone(&device),
-            vec![pso::DescriptorSetLayoutBinding {
-                binding: 0,
-                ty: pso::DescriptorType::Buffer {
-                    ty: pso::BufferDescriptorType::Uniform,
-                    format: pso::BufferDescriptorFormat::Structured {
-                        dynamic_offset: false,
-                    },
-                },
-                count: 1,
-                stage_flags: ShaderStageFlags::FRAGMENT,
-                immutable_samplers: false,
-            }],
-        );
-
-        let mut uniform_desc_pool = device
-            .borrow()
-            .device
-            .create_descriptor_pool(
-                1, // # of sets
-                &[pso::DescriptorRangeDesc {
-                    ty: pso::DescriptorType::Buffer {
-                        ty: pso::BufferDescriptorType::Uniform,
-                        format: pso::BufferDescriptorFormat::Structured {
-                            dynamic_offset: false,
-                        },
-                    },
-                    count: 1,
-                }],
-                pso::DescriptorPoolCreateFlags::empty(),
-            )
-            .ok();
-
-        let uniform_desc = uniform_desc.create_desc_set(uniform_desc_pool.as_mut().unwrap());
-
         println!("Memory types: {:?}", backend.adapter.memory_types);
 
         let triangle_vertex_buffer = BufferState::new::<[f32; 5]>(
@@ -168,14 +128,6 @@ impl<B: Backend> RendererState<B> {
             &TRIANGLE,
             buffer::Usage::VERTEX,
             &backend.adapter.memory_types,
-        );
-
-        let uniform = Uniform::new(
-            Rc::clone(&device),
-            &backend.adapter.memory_types,
-            &[1f32, 1.0f32, 1.0f32, 1.0f32],
-            uniform_desc,
-            0,
         );
 
         let screen_size_state = ScreenSizeState::new_default_start();
@@ -187,7 +139,7 @@ impl<B: Backend> RendererState<B> {
         let framebuffer = FramebufferState::new(Rc::clone(&device));
 
         let pipeline = PipelineState::new(
-            vec![uniform.get_layout()],
+            Vec::<B::DescriptorSetLayout>::new(),
             render_pass.render_pass.as_ref().unwrap(),
             Rc::clone(&device),
         );
@@ -197,9 +149,7 @@ impl<B: Backend> RendererState<B> {
         RendererState {
             backend,
             device,
-            uniform_desc_pool,
             triangle_vertex_buffer,
-            uniform,
             render_pass,
             pipeline,
             framebuffer,
@@ -267,15 +217,9 @@ impl<B: Backend> RendererState<B> {
             cmd_buffer.bind_vertex_buffers(0, Some((self.triangle_vertex_buffer.get_buffer(), 0)));
             cmd_buffer.push_graphics_constants(
                 self.pipeline.pipeline_layout.as_ref().unwrap(),
-                ShaderStageFlags::FRAGMENT,
+                ShaderStageFlags::FRAGMENT | ShaderStageFlags::VERTEX,
                 0,
                 &[time_f32.to_bits()],
-            );
-            cmd_buffer.bind_graphics_descriptor_sets(
-                self.pipeline.pipeline_layout.as_ref().unwrap(),
-                0,
-                vec![self.uniform.desc.as_ref().unwrap().set.as_ref().unwrap()],
-                &[],
             );
 
             cmd_buffer.begin_render_pass(
@@ -335,10 +279,6 @@ impl<B: Backend> Drop for RendererState<B> {
     fn drop(&mut self) {
         self.device.borrow().device.wait_idle().unwrap();
         unsafe {
-            self.device
-                .borrow()
-                .device
-                .destroy_descriptor_pool(self.uniform_desc_pool.take().unwrap());
             self.backend
                 .surface
                 .unconfigure_swapchain(&self.device.borrow().device);
