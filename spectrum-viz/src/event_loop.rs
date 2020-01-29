@@ -76,6 +76,9 @@ pub fn run() {
             winit::event::Event::RedrawRequested(_) => {
                 renderer_state.draw(user_state);
             }
+            winit::event::Event::MainEventsCleared => {
+                renderer_state.backend.window.request_redraw();
+            }
             _ => (),
         };
     });
