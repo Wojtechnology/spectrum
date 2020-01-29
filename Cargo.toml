@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "stream-gen",
-    "viz",
     "spectrum-audio",
     "spectrum-viz",
 ]

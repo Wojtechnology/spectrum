@@ -17,6 +17,7 @@ arrayvec = "0.4"
 glsl-to-spirv = "0.1.4"
 gfx-hal = { path = "../../gfx/src/hal", version = "0.4", package = "gfx-hal" }
 gfx-backend-empty = "0.4"
+spectrum-audio = { path = "../spectrum-audio" }
 
 [target.'cfg(debug_assertions)'.dependencies]
 env_logger = "0.6"
