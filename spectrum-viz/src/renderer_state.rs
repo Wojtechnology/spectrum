@@ -1,11 +1,10 @@
-extern crate gfx_hal as hal;
-
 use std::borrow;
 use std::cell::RefCell;
 use std::iter;
 use std::rc::Rc;
 use std::time::Instant;
 
+use gfx_hal as hal;
 use hal::buffer;
 use hal::command;
 use hal::format as f;

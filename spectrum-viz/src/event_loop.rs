@@ -3,19 +3,14 @@
     allow(dead_code, unused_extern_crates, unused_imports)
 )]
 
+use env_logger;
 #[cfg(not(any(feature = "vulkan", feature = "metal",)))]
-extern crate gfx_backend_empty as back;
+use gfx_backend_empty as back;
 #[cfg(feature = "metal")]
-extern crate gfx_backend_metal as back;
+use gfx_backend_metal as back;
 #[cfg(feature = "vulkan")]
-extern crate gfx_backend_vulkan as back;
-
-extern crate env_logger;
-extern crate gfx_hal as hal;
-extern crate glsl_to_spirv;
-extern crate image;
-extern crate log;
-extern crate winit;
+use gfx_backend_vulkan as back;
+use winit;
 
 use crate::backend_state::create_backend;
 use crate::renderer_state::{RendererState, UserState};

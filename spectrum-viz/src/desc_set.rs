@@ -1,8 +1,7 @@
-extern crate gfx_hal as hal;
-
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use gfx_hal as hal;
 use hal::prelude::*;
 use hal::pso;
 use hal::Backend;

@@ -1,8 +1,7 @@
-extern crate gfx_hal as hal;
-
 use std::iter;
 use std::rc::Rc;
 
+use gfx_hal as hal;
 use hal::buffer;
 use hal::command;
 use hal::format as f;

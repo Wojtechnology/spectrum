@@ -1,8 +1,7 @@
-extern crate gfx_hal as hal;
-
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use gfx_hal as hal;
 use hal::format as f;
 use hal::image as i;
 use hal::pass;

@@ -1,5 +1,4 @@
-extern crate gfx_hal as hal;
-
+use gfx_hal as hal;
 use hal::adapter::Adapter;
 use hal::prelude::*;
 use hal::queue::QueueGroup;

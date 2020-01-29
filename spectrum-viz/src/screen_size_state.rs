@@ -1,5 +1,4 @@
-extern crate gfx_hal as hal;
-
+use gfx_hal as hal;
 use hal::image::Extent;
 use hal::window::Extent2D;
 use winit::dpi::{LogicalSize, PhysicalSize};

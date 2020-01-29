@@ -1,15 +1,13 @@
-#[cfg(not(any(feature = "vulkan", feature = "metal",)))]
-extern crate gfx_backend_empty as back;
-#[cfg(feature = "metal")]
-extern crate gfx_backend_metal as back;
-#[cfg(feature = "vulkan")]
-extern crate gfx_backend_vulkan as back;
-
-extern crate gfx_hal as hal;
-
 use std::mem::ManuallyDrop;
 use std::ptr;
 
+#[cfg(not(any(feature = "vulkan", feature = "metal",)))]
+use gfx_backend_empty as back;
+#[cfg(feature = "metal")]
+use gfx_backend_metal as back;
+#[cfg(feature = "vulkan")]
+use gfx_backend_vulkan as back;
+use gfx_hal as hal;
 use hal::prelude::*;
 use hal::Backend;
 

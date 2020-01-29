@@ -1,5 +1,4 @@
-extern crate gfx_hal as hal;
-
+use gfx_hal as hal;
 use hal::format as f;
 use hal::image as i;
 

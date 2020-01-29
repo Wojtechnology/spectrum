@@ -1,5 +1,3 @@
-extern crate spectrum_audio;
-
 use std::env;
 use std::fs::File;
 use std::process;
