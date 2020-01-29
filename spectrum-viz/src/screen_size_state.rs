@@ -6,31 +6,31 @@ use winit::dpi::{LogicalSize, PhysicalSize};
 
 pub struct ScreenSizeState {
     dpi_factor: f64,
-    size: LogicalSize,
+    size: LogicalSize<u32>,
 }
 
 // TODO: Could write tests for this if I wanted to
 impl ScreenSizeState {
-    pub fn new(width: f64, height: f64) -> Self {
+    pub fn new(width: u32, height: u32, dpi_factor: f64) -> Self {
         ScreenSizeState {
-            dpi_factor: 1.0,
+            dpi_factor,
             size: LogicalSize::new(width, height),
         }
     }
 
-    pub fn new_default_min() -> Self {
-        Self::new(64.0, 64.0)
+    pub fn new_default_min(dpi_factor: f64) -> Self {
+        Self::new(64, 64, dpi_factor)
     }
 
-    pub fn new_default_start() -> Self {
-        Self::new(1024.0, 768.0)
+    pub fn new_default_start(dpi_factor: f64) -> Self {
+        Self::new(1024, 768, dpi_factor)
     }
 
-    pub fn physical_size(&self) -> PhysicalSize {
+    pub fn physical_size(&self) -> PhysicalSize<u32> {
         self.size.to_physical(self.dpi_factor)
     }
 
-    pub fn logical_size(&self) -> LogicalSize {
+    pub fn logical_size(&self) -> LogicalSize<u32> {
         self.size
     }
 
@@ -56,7 +56,11 @@ impl ScreenSizeState {
         self.dpi_factor = dpi_factor;
     }
 
-    pub fn set_size(&mut self, size: LogicalSize) {
+    pub fn set_size(&mut self, size: LogicalSize<u32>) {
         self.size = size;
+    }
+
+    pub fn set_physical_size(&mut self, p_size: PhysicalSize<u32>) {
+        self.size = LogicalSize::from_physical(p_size, self.dpi_factor);
     }
 }

@@ -1,11 +1,11 @@
-extern crate core;
+extern crate spectrum_audio;
 
 use std::env;
 use std::fs::File;
 use std::process;
 
-use core::mp3::Mp3Decoder;
-use core::RawStream;
+use spectrum_audio::mp3::Mp3Decoder;
+use spectrum_audio::RawStream;
 
 fn main() {
     let mut args = env::args();

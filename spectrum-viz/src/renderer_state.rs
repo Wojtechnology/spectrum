@@ -16,7 +16,7 @@ use hal::pso::ShaderStageFlags;
 use hal::queue::Submission;
 use hal::window as w;
 use hal::Backend;
-use winit::dpi::{LogicalPosition, LogicalSize};
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 use crate::backend_state::BackendState;
 use crate::buffer_state::BufferState;
@@ -38,14 +38,14 @@ pub struct Color<N> {
 // TODO: Move into own module
 #[derive(Copy, Clone)]
 pub struct UserState {
-    pub cursor_pos: LogicalPosition,
+    pub cursor_pos: PhysicalPosition<i32>,
     pub clear_color: Color<f32>,
 }
 
 impl UserState {
     pub fn new() -> Self {
         UserState {
-            cursor_pos: LogicalPosition::new(0.0, 0.0),
+            cursor_pos: PhysicalPosition::new(0, 0),
             clear_color: Color {
                 r: 0.0,
                 g: 0.0,
@@ -130,7 +130,7 @@ impl<B: Backend> RendererState<B> {
             &backend.adapter.memory_types,
         );
 
-        let screen_size_state = ScreenSizeState::new_default_start();
+        let screen_size_state = ScreenSizeState::new_default_start(backend.window.scale_factor());
         let (format, extent) =
             Self::configure_swapchain(&mut backend, Rc::clone(&device), &screen_size_state);
 
@@ -264,8 +264,8 @@ impl<B: Backend> RendererState<B> {
         }
     }
 
-    pub fn resize(&mut self, size: LogicalSize) {
-        self.screen_size_state.set_size(size);
+    pub fn resize(&mut self, size: PhysicalSize<u32>) {
+        self.screen_size_state.set_physical_size(size);
         self.recreate_swapchain();
     }
 
