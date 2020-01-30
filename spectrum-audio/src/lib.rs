@@ -124,21 +124,38 @@ pub mod mp3 {
     }
 }
 
-pub fn run_audio_loop<D: RawStream<i16>>(decoder: D) {
-    let host = cpal::default_host();
-    let event_loop = host.event_loop();
-    // TODO: Error processing
-    let device = host
-        .default_output_device()
-        .expect("no output device available");
+fn find_format_with_sample_rate<D: RawStream<i16>>(
+    decoder: &D,
+    device: &cpal::Device,
+) -> cpal::Format {
     let mut supported_formats_range = device
         .supported_output_formats()
         .expect("error while querying_formats");
-    supported_formats_range.next();
-    let format = supported_formats_range
-        .next()
-        .expect("no supported format")
-        .with_max_sample_rate();
+    let decoder_sample_rate = decoder.sample_rate() as u32;
+    loop {
+        let supported_format = supported_formats_range
+            .next()
+            .expect("Couldn't find a suitable output format");
+        if decoder_sample_rate >= supported_format.min_sample_rate.0
+            && decoder_sample_rate <= supported_format.max_sample_rate.0
+        {
+            break cpal::Format {
+                channels: supported_format.channels,
+                sample_rate: cpal::SampleRate(decoder_sample_rate),
+                data_type: supported_format.data_type,
+            };
+        }
+    }
+}
+
+pub fn run_audio_loop<D: RawStream<i16>>(decoder: D) {
+    let host = cpal::default_host();
+    let event_loop = host.event_loop();
+    let device = host
+        .default_output_device()
+        .expect("no output device available");
+    let format = find_format_with_sample_rate(&decoder, &device);
+    println!("Using output format: {:?}", format);
     let stream_id = event_loop.build_output_stream(&device, &format).unwrap();
     event_loop
         .play_stream(stream_id)
