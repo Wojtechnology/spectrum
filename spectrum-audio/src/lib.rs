@@ -35,7 +35,7 @@ impl Error for DecoderError {
     }
 }
 
-pub trait RawStream<T>: Iterator<Item = T> {
+pub trait RawStream<T>: Iterator<Item = T> + Send {
     fn channels(&self) -> usize;
     fn sample_rate(&self) -> i32;
 }
@@ -47,7 +47,7 @@ pub mod mp3 {
 
     use super::{DecoderError, RawStream};
 
-    pub struct Mp3Decoder<R> {
+    pub struct Mp3Decoder<R: Send> {
         decoder: Decoder<R>,
         current_frame: Frame,
         current_frame_offset: usize,
@@ -56,7 +56,7 @@ pub mod mp3 {
 
     impl<R> Mp3Decoder<R>
     where
-        R: Read,
+        R: Read + Send,
     {
         pub fn new(reader: R) -> Result<Mp3Decoder<R>, DecoderError> {
             let mut decoder = Decoder::new(reader);
@@ -85,7 +85,7 @@ pub mod mp3 {
 
     impl<R> Iterator for Mp3Decoder<R>
     where
-        R: Read,
+        R: Read + Send,
     {
         type Item = i16;
 
@@ -112,7 +112,7 @@ pub mod mp3 {
 
     impl<R> RawStream<i16> for Mp3Decoder<R>
     where
-        R: Read,
+        R: Read + Send,
     {
         fn channels(&self) -> usize {
             self.current_frame.channels
@@ -148,7 +148,7 @@ fn find_format_with_sample_rate<D: RawStream<i16>>(
     }
 }
 
-pub fn run_audio_loop<D: RawStream<i16>>(decoder: D) {
+pub fn run_audio_loop<D: RawStream<i16>>(mut decoder: D) {
     let host = cpal::default_host();
     let event_loop = host.event_loop();
     let device = host
@@ -160,8 +160,6 @@ pub fn run_audio_loop<D: RawStream<i16>>(decoder: D) {
     event_loop
         .play_stream(stream_id)
         .expect("failed to play_stream");
-    let vals: Vec<i16> = decoder.collect();
-    let mut v_iter = vals.iter();
     event_loop.run(move |stream_id, stream_result| {
         let stream_data = match stream_result {
             Ok(data) => data,
@@ -176,8 +174,8 @@ pub fn run_audio_loop<D: RawStream<i16>>(decoder: D) {
                 buffer: UnknownTypeOutputBuffer::U16(mut buffer),
             } => {
                 for elem in buffer.iter_mut() {
-                    let v = match v_iter.next() {
-                        Some(&v) => v.to_u16(),
+                    let v = match decoder.next() {
+                        Some(v) => v.to_u16(),
                         None => u16::max_value() / 2,
                     };
                     *elem = v;
@@ -187,8 +185,8 @@ pub fn run_audio_loop<D: RawStream<i16>>(decoder: D) {
                 buffer: UnknownTypeOutputBuffer::I16(mut buffer),
             } => {
                 for elem in buffer.iter_mut() {
-                    let v = match v_iter.next() {
-                        Some(&v) => v,
+                    let v = match decoder.next() {
+                        Some(v) => v,
                         None => 0,
                     };
                     *elem = v;
@@ -198,8 +196,8 @@ pub fn run_audio_loop<D: RawStream<i16>>(decoder: D) {
                 buffer: UnknownTypeOutputBuffer::F32(mut buffer),
             } => {
                 for elem in buffer.iter_mut() {
-                    let v = match v_iter.next() {
-                        Some(&v) => v.to_f32(),
+                    let v = match decoder.next() {
+                        Some(v) => v.to_f32(),
                         None => 0.0,
                     };
                     *elem = v;
