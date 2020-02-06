@@ -1,9 +1,15 @@
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::thread;
+use std::time::{Duration, SystemTime};
 
 use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
+
+pub mod concurrent_tee;
+
+use concurrent_tee::ConcurrentTee;
 
 #[derive(Debug)]
 pub enum DecoderError {
@@ -148,18 +154,29 @@ fn find_format_with_sample_rate<D: RawStream<i16>>(
     }
 }
 
-pub fn run_audio_loop<D: RawStream<i16>>(mut decoder: D) {
+pub fn run_audio_loop<D: RawStream<i16> + 'static>(decoder: D) {
     let host = cpal::default_host();
     let event_loop = host.event_loop();
     let device = host
         .default_output_device()
         .expect("no output device available");
     let format = find_format_with_sample_rate(&decoder, &device);
-    println!("Using output format: {:?}", format);
     let stream_id = event_loop.build_output_stream(&device, &format).unwrap();
+    let (mut decoder_a, mut decoder_b) = ConcurrentTee::new(decoder);
+
     event_loop
         .play_stream(stream_id)
         .expect("failed to play_stream");
+
+    thread::spawn(move || {
+        let start = SystemTime::now();
+        decoder_b.collect::<Vec<i16>>();
+        println!(
+            "Done collecting music file in {} seconds",
+            start.elapsed().unwrap().as_secs()
+        );
+    });
+
     event_loop.run(move |stream_id, stream_result| {
         let stream_data = match stream_result {
             Ok(data) => data,
@@ -174,7 +191,7 @@ pub fn run_audio_loop<D: RawStream<i16>>(mut decoder: D) {
                 buffer: UnknownTypeOutputBuffer::U16(mut buffer),
             } => {
                 for elem in buffer.iter_mut() {
-                    let v = match decoder.next() {
+                    let v = match decoder_a.next() {
                         Some(v) => v.to_u16(),
                         None => u16::max_value() / 2,
                     };
@@ -185,7 +202,7 @@ pub fn run_audio_loop<D: RawStream<i16>>(mut decoder: D) {
                 buffer: UnknownTypeOutputBuffer::I16(mut buffer),
             } => {
                 for elem in buffer.iter_mut() {
-                    let v = match decoder.next() {
+                    let v = match decoder_a.next() {
                         Some(v) => v,
                         None => 0,
                     };
@@ -196,7 +213,7 @@ pub fn run_audio_loop<D: RawStream<i16>>(mut decoder: D) {
                 buffer: UnknownTypeOutputBuffer::F32(mut buffer),
             } => {
                 for elem in buffer.iter_mut() {
-                    let v = match decoder.next() {
+                    let v = match decoder_a.next() {
                         Some(v) => v.to_f32(),
                         None => 0.0,
                     };

@@ -7,3 +7,4 @@ edition = "2018"
 [dependencies]
 minimp3 = "0.3"
 cpal = "0.10.0"
+itertools = "0.8"
