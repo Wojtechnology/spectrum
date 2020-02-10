@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -154,7 +155,33 @@ fn find_format_with_sample_rate<D: RawStream<i16>>(
     }
 }
 
+struct IdxBounds {
+    upper_bound: u64,
+    lower_bound: u64,
+}
+
+impl IdxBounds {
+    fn new() -> Self {
+        Self {
+            upper_bound: 0,
+            lower_bound: 0,
+        }
+    }
+}
+
+fn push_sample<I: Iterator<Item = i16>>(iter: &mut I, cur_idx: &mut u64, channels: usize) -> bool {
+    for _ in 0..channels {
+        *cur_idx += 1;
+        match iter.next() {
+            Some(_v) => {}
+            None => return false,
+        }
+    }
+    return true;
+}
+
 pub fn run_audio_loop<D: RawStream<i16> + 'static>(decoder: D) {
+    // Set up stream
     let host = cpal::default_host();
     let event_loop = host.event_loop();
     let device = host
@@ -162,19 +189,47 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(decoder: D) {
         .expect("no output device available");
     let format = find_format_with_sample_rate(&decoder, &device);
     let stream_id = event_loop.build_output_stream(&device, &format).unwrap();
-    let (mut decoder_a, mut decoder_b) = ConcurrentTee::new(decoder);
-
     event_loop
         .play_stream(stream_id)
         .expect("failed to play_stream");
 
+    // Audio meta and wait computation
+    let sample_rate = decoder.sample_rate();
+    let channels = decoder.channels();
+    let wait_nanos = ((1.0 as f64) / (sample_rate as f64 * channels as f64) * (1e9 as f64)) as u64;
+
+    // Init concurrent state
+    let idx_bounds_one = Arc::new(RwLock::new(IdxBounds::new()));
+    let idx_bounds_two = idx_bounds_one.clone();
+    let (mut decoder_a, mut decoder_b) = ConcurrentTee::new(decoder);
+
     thread::spawn(move || {
-        let start = SystemTime::now();
-        decoder_b.collect::<Vec<i16>>();
-        println!(
-            "Done collecting music file in {} seconds",
-            start.elapsed().unwrap().as_secs()
-        );
+        let mut cur_idx: u64 = 0;
+        let mut last_time = SystemTime::now();
+        loop {
+            let (lower_bound, upper_bound) = {
+                let bounds = idx_bounds_one.read().unwrap();
+                (bounds.lower_bound, bounds.upper_bound)
+            };
+            while cur_idx < lower_bound {
+                if !push_sample(&mut decoder_b, &mut cur_idx, channels) {
+                    break;
+                }
+            }
+            if cur_idx < upper_bound {
+                if !push_sample(&mut decoder_b, &mut cur_idx, channels) {
+                    break;
+                }
+            }
+
+            // Wait to immitate progression of time
+            let proc_duration = last_time.elapsed().unwrap();
+            let wait_duration = Duration::from_nanos(wait_nanos);
+            if wait_duration > proc_duration {
+                thread::sleep(wait_duration - proc_duration);
+            }
+            last_time = SystemTime::now();
+        }
     });
 
     event_loop.run(move |stream_id, stream_result| {
@@ -186,6 +241,7 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(decoder: D) {
             }
         };
 
+        let mut buffer_count: u64 = 0;
         match stream_data {
             StreamData::Output {
                 buffer: UnknownTypeOutputBuffer::U16(mut buffer),
@@ -196,6 +252,7 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(decoder: D) {
                         None => u16::max_value() / 2,
                     };
                     *elem = v;
+                    buffer_count += 1;
                 }
             }
             StreamData::Output {
@@ -207,6 +264,7 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(decoder: D) {
                         None => 0,
                     };
                     *elem = v;
+                    buffer_count += 1;
                 }
             }
             StreamData::Output {
@@ -218,9 +276,15 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(decoder: D) {
                         None => 0.0,
                     };
                     *elem = v;
+                    buffer_count += 1;
                 }
             }
             _ => (),
         }
+
+        // Update bounds
+        let mut bounds = idx_bounds_two.write().unwrap();
+        bounds.lower_bound = bounds.upper_bound;
+        bounds.upper_bound += buffer_count;
     });
 }
