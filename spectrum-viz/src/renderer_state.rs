@@ -2,7 +2,7 @@ use std::borrow;
 use std::cell::RefCell;
 use std::iter;
 use std::rc::Rc;
-use std::time::Instant;
+use std::sync::{Arc, RwLock};
 
 use gfx_hal as hal;
 use hal::buffer;
@@ -25,6 +25,7 @@ use crate::gx_constant::TRIANGLE;
 use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
 use crate::screen_size_state::ScreenSizeState;
+use spectrum_audio::shared_data::SharedData;
 
 // TODO: Move into own module
 #[derive(Copy, Clone)]
@@ -35,14 +36,15 @@ pub struct Color<N> {
 }
 
 // TODO: Move into own module
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct UserState {
     pub cursor_pos: PhysicalPosition<i32>,
     pub clear_color: Color<f32>,
+    shared_data: Arc<RwLock<SharedData>>,
 }
 
 impl UserState {
-    pub fn new() -> Self {
+    pub fn new(shared_data: Arc<RwLock<SharedData>>) -> Self {
         UserState {
             cursor_pos: PhysicalPosition::new(0, 0),
             clear_color: Color {
@@ -50,13 +52,13 @@ impl UserState {
                 g: 0.0,
                 b: 0.0,
             },
+            shared_data,
         }
     }
 }
 
 pub struct RendererState<B: Backend> {
     pub viewport: pso::Viewport,
-    creation_instant: Instant,
     // Locally defined data
     pub backend: BackendState<B>,
     render_pass: RenderPassState<B>,
@@ -153,7 +155,6 @@ impl<B: Backend> RendererState<B> {
             pipeline,
             framebuffer,
             viewport,
-            creation_instant: std::time::Instant::now(),
             screen_size_state,
         }
     }
@@ -167,7 +168,7 @@ impl<B: Backend> RendererState<B> {
         self.viewport = create_viewport(extent);
     }
 
-    pub fn draw(&mut self, user_state: UserState) {
+    pub fn draw(&mut self, user_state: &UserState) {
         let surface_image = unsafe {
             match self.backend.surface.acquire_image(!0) {
                 Ok((image, _)) => image,
@@ -193,8 +194,9 @@ impl<B: Backend> RendererState<B> {
         let (command_pool, cmd_buffer, present_fence, present_semaphore) =
             self.framebuffer.next_frame_info();
 
-        let duration = std::time::Instant::now().duration_since(self.creation_instant);
-        let time_f32 = duration.as_secs() as f32 + duration.subsec_nanos() as f32 * 1e-9;
+        let sample_vec = user_state.shared_data.read().unwrap().get_sample();
+        let value = sample_vec[0];
+        let value_f = ((value as f32) / (i16::max_value() as f32)).abs();
 
         unsafe {
             self.device
@@ -218,7 +220,7 @@ impl<B: Backend> RendererState<B> {
                 self.pipeline.pipeline_layout.as_ref().unwrap(),
                 ShaderStageFlags::FRAGMENT | ShaderStageFlags::VERTEX,
                 0,
-                &[time_f32.to_bits()],
+                &[value_f.to_bits()],
             );
 
             cmd_buffer.begin_render_pass(

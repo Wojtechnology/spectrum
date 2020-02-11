@@ -12,6 +12,6 @@ out gl_PerVertex {
 };
 
 void main() {
-    gl_Position = vec4(a_pos.x * cos(push.time), a_pos.y * cos(push.time), 0.0, 1.0);
+    gl_Position = vec4(a_pos.x * push.time, a_pos.y * push.time, 0.0, 1.0);
     frag_color = a_color;
 }

@@ -3,6 +3,8 @@
     allow(dead_code, unused_extern_crates, unused_imports)
 )]
 
+use std::sync::{Arc, RwLock};
+
 use env_logger;
 #[cfg(not(any(feature = "vulkan", feature = "metal",)))]
 use gfx_backend_empty as back;
@@ -15,6 +17,7 @@ use winit;
 use crate::backend_state::create_backend;
 use crate::renderer_state::{RendererState, UserState};
 use crate::screen_size_state::ScreenSizeState;
+use spectrum_audio::shared_data::SharedData;
 
 fn init() -> (
     winit::event_loop::EventLoop<()>,
@@ -36,11 +39,11 @@ fn init() -> (
 }
 
 #[cfg(any(feature = "vulkan", feature = "metal",))]
-pub fn run() {
+pub fn run(shared_data: Arc<RwLock<SharedData>>) {
     let (event_loop, mut renderer_state) = init();
-    let mut user_state = UserState::new();
+    let mut user_state = UserState::new(shared_data);
 
-    renderer_state.draw(user_state);
+    renderer_state.draw(&user_state);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -69,7 +72,7 @@ pub fn run() {
                 _ => (),
             },
             winit::event::Event::RedrawRequested(_) => {
-                renderer_state.draw(user_state);
+                renderer_state.draw(&user_state);
             }
             winit::event::Event::MainEventsCleared => {
                 renderer_state.backend.window.request_redraw();

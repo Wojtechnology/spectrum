@@ -8,9 +8,11 @@ use std::time::{Duration, SystemTime};
 use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
 
-pub mod concurrent_tee;
+mod concurrent_tee;
+pub mod shared_data;
 
 use concurrent_tee::ConcurrentTee;
+use shared_data::SharedData;
 
 #[derive(Debug)]
 pub enum DecoderError {
@@ -169,18 +171,29 @@ impl IdxBounds {
     }
 }
 
-fn push_sample<I: Iterator<Item = i16>>(iter: &mut I, cur_idx: &mut u64, channels: usize) -> bool {
+fn push_sample<I: Iterator<Item = i16>>(
+    iter: &mut I,
+    cur_idx: &mut u64,
+    channels: usize,
+    shared_data: Arc<RwLock<SharedData>>,
+) -> bool {
+    let mut sample = Vec::<i16>::with_capacity(channels);
     for _ in 0..channels {
         *cur_idx += 1;
         match iter.next() {
-            Some(_v) => {}
+            Some(v) => sample.push(v),
             None => return false,
         }
     }
+    let mut data = shared_data.write().unwrap();
+    data.set_sample(sample);
     return true;
 }
 
-pub fn run_audio_loop<D: RawStream<i16> + 'static>(decoder: D) {
+pub fn run_audio_loop<D: RawStream<i16> + 'static>(
+    decoder: D,
+    shared_data: Arc<RwLock<SharedData>>,
+) {
     // Set up stream
     let host = cpal::default_host();
     let event_loop = host.event_loop();
@@ -212,12 +225,12 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(decoder: D) {
                 (bounds.lower_bound, bounds.upper_bound)
             };
             while cur_idx < lower_bound {
-                if !push_sample(&mut decoder_b, &mut cur_idx, channels) {
+                if !push_sample(&mut decoder_b, &mut cur_idx, channels, shared_data.clone()) {
                     break;
                 }
             }
             if cur_idx < upper_bound {
-                if !push_sample(&mut decoder_b, &mut cur_idx, channels) {
+                if !push_sample(&mut decoder_b, &mut cur_idx, channels, shared_data.clone()) {
                     break;
                 }
             }
