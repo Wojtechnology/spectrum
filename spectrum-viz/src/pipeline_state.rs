@@ -12,6 +12,7 @@ use hal::pso::{ShaderStageFlags, VertexInputRate};
 use hal::Backend;
 
 use crate::device_state::DeviceState;
+use crate::gx_object::VertexData;
 
 const ENTRY_NAME: &str = "main";
 
@@ -111,7 +112,7 @@ impl<B: Backend> PipelineState<B> {
                 });
                 pipeline_desc.vertex_buffers.push(pso::VertexBufferDesc {
                     binding: 0,
-                    stride: size_of::<[f32; 5]>() as u32,
+                    stride: size_of::<VertexData<f32>>() as u32,
                     rate: VertexInputRate::Vertex,
                 });
 
@@ -119,7 +120,7 @@ impl<B: Backend> PipelineState<B> {
                     location: 0,
                     binding: 0,
                     element: pso::Element {
-                        format: f::Format::Rg32Sfloat,
+                        format: f::Format::Rgb32Sfloat,
                         offset: 0,
                     },
                 });
@@ -128,7 +129,15 @@ impl<B: Backend> PipelineState<B> {
                     binding: 0,
                     element: pso::Element {
                         format: f::Format::Rgb32Sfloat,
-                        offset: size_of::<[f32; 2]>() as u32,
+                        offset: size_of::<[f32; 3]>() as u32,
+                    },
+                });
+                pipeline_desc.attributes.push(pso::AttributeDesc {
+                    location: 2,
+                    binding: 0,
+                    element: pso::Element {
+                        format: f::Format::Rg32Sfloat,
+                        offset: size_of::<[f32; 6]>() as u32,
                     },
                 });
 

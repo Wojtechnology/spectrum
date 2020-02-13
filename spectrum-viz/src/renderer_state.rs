@@ -21,7 +21,8 @@ use crate::backend_state::BackendState;
 use crate::buffer_state::BufferState;
 use crate::device_state::DeviceState;
 use crate::framebuffer_state::FramebufferState;
-use crate::gx_constant::TRIANGLE;
+use crate::gx_constant;
+use crate::gx_object::VertexData;
 use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
 use crate::screen_size_state::ScreenSizeState;
@@ -124,9 +125,9 @@ impl<B: Backend> RendererState<B> {
 
         println!("Memory types: {:?}", backend.adapter.memory_types);
 
-        let triangle_vertex_buffer = BufferState::new::<[f32; 5]>(
+        let triangle_vertex_buffer = BufferState::new::<VertexData<f32>>(
             Rc::clone(&device),
-            &TRIANGLE,
+            &gx_constant::triangle(),
             buffer::Usage::VERTEX,
             &backend.adapter.memory_types,
         );

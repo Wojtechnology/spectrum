@@ -3,8 +3,9 @@ layout (push_constant) uniform PushConsts {
   float time;
 } push;
 
-layout(location = 0) in vec2 a_pos;
-layout(location = 1) in vec3 a_color;
+layout(location = 0) in vec3 vert_pos;
+layout(location = 1) in vec3 vert_col;
+layout(location = 2) in vec2 vert_uv;
 layout(location = 0) out vec3 frag_color;
 
 out gl_PerVertex {
@@ -12,6 +13,6 @@ out gl_PerVertex {
 };
 
 void main() {
-    gl_Position = vec4(a_pos.x * push.time, a_pos.y * push.time, 0.0, 1.0);
-    frag_color = a_color;
+    gl_Position = vec4(vert_pos.x * push.time, vert_pos.y * push.time, vert_pos.z, 1.0);
+    frag_color = vert_col;
 }

@@ -1,30 +1,107 @@
 #[derive(Debug, Clone, Copy)]
-pub struct Vertex {
-    pub a_pos: [f32; 2],
-    pub a_uv: [f32; 2],
+struct Position3D<T> {
+    x: T,
+    y: T,
+    z: T,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Quad {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
+struct ColorRGB<T> {
+    r: T,
+    g: T,
+    b: T,
 }
 
-impl Quad {
-    pub fn vertex_attributes(self) -> [f32; 4 * (2 + 3 + 2)] {
-        let x = self.x;
-        let y = self.y;
-        let w = self.w;
-        let h = self.h;
-        #[cfg_attr(rustfmt, rustfmt_skip)]
+#[derive(Debug, Clone, Copy)]
+struct UVMapping<T> {
+    u: T,
+    v: T,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Vertex<T>
+where
+    T: Copy,
+{
+    pos: Position3D<T>,
+    col: ColorRGB<T>,
+    uv: UVMapping<T>,
+}
+
+pub type VertexData<T> = [T; 8];
+
+impl<T> Vertex<T>
+where
+    T: Copy,
+{
+    pub fn new(
+        pos_x: T,
+        pos_y: T,
+        pos_z: T,
+        col_r: T,
+        col_g: T,
+        col_b: T,
+        uv_u: T,
+        uv_v: T,
+    ) -> Self {
+        Vertex {
+            pos: Position3D {
+                x: pos_x,
+                y: pos_y,
+                z: pos_z,
+            },
+            col: ColorRGB {
+                r: col_r,
+                g: col_g,
+                b: col_b,
+            },
+            uv: UVMapping { u: uv_u, v: uv_v },
+        }
+    }
+
+    pub fn data(&self) -> VertexData<T> {
         [
-        // X    Y    R    G    B                  U    V
-        x  , y+h, 1.0, 0.0, 0.0, /* red     */ 0.0, 1.0, /* bottom left */
-        x  , y  , 0.0, 1.0, 0.0, /* green   */ 0.0, 0.0, /* top left */
-        x+w, y  , 0.0, 0.0, 1.0, /* blue    */ 1.0, 0.0, /* top right */
-        x+w, y+h, 1.0, 0.0, 1.0, /* magenta */ 1.0, 1.0, /* bottom right */
+            self.pos.x, self.pos.y, self.pos.z, self.col.r, self.col.g, self.col.b, self.uv.u,
+            self.uv.v,
         ]
+    }
+}
+
+pub struct Vertices<T>
+where
+    T: Copy,
+{
+    vertices: Vec<Vertex<T>>,
+}
+
+impl<T> Vertices<T>
+where
+    T: Copy,
+{
+    pub fn new() -> Self {
+        Vertices {
+            vertices: Vec::<Vertex<T>>::new(),
+        }
+    }
+
+    pub fn add(
+        &mut self,
+        pos_x: T,
+        pos_y: T,
+        pos_z: T,
+        col_r: T,
+        col_g: T,
+        col_b: T,
+        uv_u: T,
+        uv_v: T,
+    ) {
+        self.vertices.push(Vertex::new(
+            pos_x, pos_y, pos_z, col_r, col_g, col_b, uv_u, uv_v,
+        ));
+    }
+
+    pub fn data(&self) -> Box<[VertexData<T>]> {
+        let vertex_datas: Vec<_> = self.vertices.iter().map(|&vertex| vertex.data()).collect();
+        vertex_datas.into_boxed_slice()
     }
 }
