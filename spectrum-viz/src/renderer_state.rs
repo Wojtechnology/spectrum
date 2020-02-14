@@ -15,6 +15,7 @@ use hal::pso::ShaderStageFlags;
 use hal::queue::Submission;
 use hal::window as w;
 use hal::Backend;
+use hal::IndexType;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 use crate::backend_state::BackendState;
@@ -22,7 +23,7 @@ use crate::buffer_state::BufferState;
 use crate::device_state::DeviceState;
 use crate::framebuffer_state::FramebufferState;
 use crate::gx_constant;
-use crate::gx_object::VertexData;
+use crate::gx_object::{TriIndexData, VertexData};
 use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
 use crate::screen_size_state::ScreenSizeState;
@@ -64,6 +65,7 @@ pub struct RendererState<B: Backend> {
     pub backend: BackendState<B>,
     render_pass: RenderPassState<B>,
     triangle_vertex_buffer: BufferState<B>,
+    index_buffer: BufferState<B>,
     pipeline: PipelineState<B>,
     framebuffer: FramebufferState<B>,
     device: Rc<RefCell<DeviceState<B>>>,
@@ -127,8 +129,15 @@ impl<B: Backend> RendererState<B> {
 
         let triangle_vertex_buffer = BufferState::new::<VertexData<f32>>(
             Rc::clone(&device),
-            &gx_constant::triangle(),
+            &gx_constant::triangle_vertices(),
             buffer::Usage::VERTEX,
+            &backend.adapter.memory_types,
+        );
+
+        let index_buffer = BufferState::new::<TriIndexData<u16>>(
+            Rc::clone(&device),
+            &gx_constant::triangle_indices(),
+            buffer::Usage::INDEX,
             &backend.adapter.memory_types,
         );
 
@@ -152,6 +161,7 @@ impl<B: Backend> RendererState<B> {
             backend,
             device,
             triangle_vertex_buffer,
+            index_buffer,
             render_pass,
             pipeline,
             framebuffer,
@@ -217,6 +227,11 @@ impl<B: Backend> RendererState<B> {
             cmd_buffer.set_scissors(0, &[self.viewport.rect]);
             cmd_buffer.bind_graphics_pipeline(self.pipeline.pipeline.as_ref().unwrap());
             cmd_buffer.bind_vertex_buffers(0, Some((self.triangle_vertex_buffer.get_buffer(), 0)));
+            cmd_buffer.bind_index_buffer(buffer::IndexBufferView {
+                buffer: self.index_buffer.get_buffer(),
+                offset: 0,
+                index_type: IndexType::U16,
+            });
             cmd_buffer.push_graphics_constants(
                 self.pipeline.pipeline_layout.as_ref().unwrap(),
                 ShaderStageFlags::FRAGMENT | ShaderStageFlags::VERTEX,
@@ -240,7 +255,7 @@ impl<B: Backend> RendererState<B> {
                 }],
                 command::SubpassContents::Inline,
             );
-            cmd_buffer.draw(0..3, 0..1);
+            cmd_buffer.draw_indexed(0..12, 0, 0..1);
             cmd_buffer.end_render_pass();
             cmd_buffer.finish();
 

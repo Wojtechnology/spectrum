@@ -18,6 +18,9 @@ struct UVMapping<T> {
     v: T,
 }
 
+pub type VertexData<T> = [T; 8];
+pub type TriIndexData<T> = [T; 3];
+
 #[derive(Debug, Clone, Copy)]
 struct Vertex<T>
 where
@@ -27,8 +30,6 @@ where
     col: ColorRGB<T>,
     uv: UVMapping<T>,
 }
-
-pub type VertexData<T> = [T; 8];
 
 impl<T> Vertex<T>
 where
@@ -67,6 +68,7 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Vertices<T>
 where
     T: Copy,
@@ -101,7 +103,64 @@ where
     }
 
     pub fn data(&self) -> Box<[VertexData<T>]> {
-        let vertex_datas: Vec<_> = self.vertices.iter().map(|&vertex| vertex.data()).collect();
-        vertex_datas.into_boxed_slice()
+        self.vertices
+            .iter()
+            .map(|&vertex| vertex.data())
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TriIndex<T>
+where
+    T: Copy,
+{
+    pt1: T,
+    pt2: T,
+    pt3: T,
+}
+
+impl<T> TriIndex<T>
+where
+    T: Copy,
+{
+    pub fn new(pt1: T, pt2: T, pt3: T) -> Self {
+        TriIndex { pt1, pt2, pt3 }
+    }
+
+    pub fn data(&self) -> TriIndexData<T> {
+        [self.pt1, self.pt2, self.pt3]
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TriIndices<T>
+where
+    T: Copy,
+{
+    indices: Vec<TriIndex<T>>,
+}
+
+impl<T> TriIndices<T>
+where
+    T: Copy,
+{
+    pub fn new() -> Self {
+        TriIndices {
+            indices: Vec::<TriIndex<T>>::new(),
+        }
+    }
+
+    pub fn add(&mut self, pt1: T, pt2: T, pt3: T) {
+        self.indices.push(TriIndex::new(pt1, pt2, pt3));
+    }
+
+    pub fn data(&self) -> Box<[TriIndexData<T>]> {
+        self.indices
+            .iter()
+            .map(|&index| index.data())
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 }
