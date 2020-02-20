@@ -15,8 +15,10 @@ log = "0.4"
 winit = "0.20.0"
 arrayvec = "0.4"
 glsl-to-spirv = "0.1.4"
+gfx = "0.18"
 gfx-hal = { path = "../../gfx/src/hal", version = "0.4", package = "gfx-hal" }
 gfx-backend-empty = "0.4"
+nalgebra-glm = "0.2"
 spectrum-audio = { path = "../spectrum-audio" }
 
 [target.'cfg(debug_assertions)'.dependencies]

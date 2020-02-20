@@ -52,10 +52,8 @@ impl<B: Backend> PipelineState<B> {
         IS::Item: std::borrow::Borrow<B::DescriptorSetLayout>,
     {
         let device = &device_ptr.borrow().device;
-        let push_constants = vec![
-            (ShaderStageFlags::FRAGMENT, 0..4),
-            (ShaderStageFlags::VERTEX, 0..4),
-        ];
+        let mat_size = (size_of::<f32>() * 4 * 4) as u32;
+        let push_constants = vec![(ShaderStageFlags::VERTEX, 0..mat_size)];
         let pipeline_layout = device
             .create_pipeline_layout(desc_layouts, push_constants)
             .expect("Can't create pipeline layout");
@@ -99,10 +97,19 @@ impl<B: Backend> PipelineState<B> {
                     main_pass: render_pass,
                 };
 
+                let rasterizer = pso::Rasterizer {
+                    depth_clamping: false,
+                    polygon_mode: pso::PolygonMode::Fill,
+                    cull_face: pso::Face::BACK,
+                    front_face: pso::FrontFace::Clockwise,
+                    depth_bias: None,
+                    conservative: false,
+                };
+
                 let mut pipeline_desc = pso::GraphicsPipelineDesc::new(
                     shader_entries,
                     pso::Primitive::TriangleList,
-                    pso::Rasterizer::FILL,
+                    rasterizer,
                     &pipeline_layout,
                     subpass,
                 );

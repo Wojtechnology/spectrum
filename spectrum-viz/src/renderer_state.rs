@@ -3,7 +3,9 @@ use std::cell::RefCell;
 use std::iter;
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
+use std::time::SystemTime;
 
+use gfx::memory::cast_slice;
 use gfx_hal as hal;
 use hal::buffer;
 use hal::command;
@@ -16,6 +18,7 @@ use hal::queue::Submission;
 use hal::window as w;
 use hal::Backend;
 use hal::IndexType;
+use nalgebra_glm as glm;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 use crate::backend_state::BackendState;
@@ -42,6 +45,7 @@ pub struct Color<N> {
 pub struct UserState {
     pub cursor_pos: PhysicalPosition<i32>,
     pub clear_color: Color<f32>,
+    start_time: SystemTime,
     shared_data: Arc<RwLock<SharedData>>,
 }
 
@@ -54,6 +58,7 @@ impl UserState {
                 g: 0.0,
                 b: 0.0,
             },
+            start_time: SystemTime::now(),
             shared_data,
         }
     }
@@ -129,14 +134,14 @@ impl<B: Backend> RendererState<B> {
 
         let triangle_vertex_buffer = BufferState::new::<VertexData<f32>>(
             Rc::clone(&device),
-            &gx_constant::triangle_vertices(),
+            &gx_constant::cube_vertices(),
             buffer::Usage::VERTEX,
             &backend.adapter.memory_types,
         );
 
         let index_buffer = BufferState::new::<TriIndexData<u16>>(
             Rc::clone(&device),
-            &gx_constant::triangle_indices(),
+            &gx_constant::cube_indices(),
             buffer::Usage::INDEX,
             &backend.adapter.memory_types,
         );
@@ -180,6 +185,46 @@ impl<B: Backend> RendererState<B> {
     }
 
     pub fn draw(&mut self, user_state: &UserState) {
+        let view = glm::look_at_lh(
+            &glm::make_vec3(&[0.0, 0.0, -5.0]),
+            &glm::make_vec3(&[0.0, 0.0, 0.0]),
+            &glm::make_vec3(&[0.0, 1.0, 0.0]).normalize(),
+        );
+
+        let size = self.screen_size_state.logical_size();
+        let projection = {
+            let mut temp = glm::perspective_lh_zo(
+                (size.width as f32) / (size.height as f32),
+                f32::to_radians(50.0),
+                0.1,
+                100.0,
+            );
+            temp[(1, 1)] *= -1.0;
+            temp
+        };
+
+        let sample_vec = user_state.shared_data.read().unwrap().get_sample();
+        let value = sample_vec[0];
+        let value_f = ((value as f32) / (i16::max_value() as f32)).abs();
+
+        let duration = (user_state.start_time.elapsed().unwrap().as_nanos() as f32) / 1e9 * 60.0;
+        let cursor_x = user_state.cursor_pos.x as f32 / size.width as f32;
+        let cursor_y = user_state.cursor_pos.y as f32 / size.height as f32;
+        let scale = value_f * 0.5 + 1.0;
+        let model = {
+            let mut model = glm::TMat4::<f32>::identity();
+            model = glm::rotate(
+                &model,
+                f32::to_radians(duration),
+                &glm::make_vec3(&[cursor_x, cursor_y, -1.0]).normalize(),
+            );
+            model = glm::scale(&model, &glm::TVec3::new(scale, scale, scale));
+            model = glm::translate(&model, &glm::TVec3::new(-0.5, -0.5, -0.5));
+            model
+        };
+
+        let mvp = projection * view * model;
+
         let surface_image = unsafe {
             match self.backend.surface.acquire_image(!0) {
                 Ok((image, _)) => image,
@@ -204,10 +249,6 @@ impl<B: Backend> RendererState<B> {
 
         let (command_pool, cmd_buffer, present_fence, present_semaphore) =
             self.framebuffer.next_frame_info();
-
-        let sample_vec = user_state.shared_data.read().unwrap().get_sample();
-        let value = sample_vec[0];
-        let value_f = ((value as f32) / (i16::max_value() as f32)).abs();
 
         unsafe {
             self.device
@@ -234,9 +275,9 @@ impl<B: Backend> RendererState<B> {
             });
             cmd_buffer.push_graphics_constants(
                 self.pipeline.pipeline_layout.as_ref().unwrap(),
-                ShaderStageFlags::FRAGMENT | ShaderStageFlags::VERTEX,
+                ShaderStageFlags::VERTEX,
                 0,
-                &[value_f.to_bits()],
+                cast_slice::<f32, u32>(&mvp.data),
             );
 
             cmd_buffer.begin_render_pass(
@@ -255,7 +296,7 @@ impl<B: Backend> RendererState<B> {
                 }],
                 command::SubpassContents::Inline,
             );
-            cmd_buffer.draw_indexed(0..12, 0, 0..1);
+            cmd_buffer.draw_indexed(0..36, 0, 0..1);
             cmd_buffer.end_render_pass();
             cmd_buffer.finish();
 
