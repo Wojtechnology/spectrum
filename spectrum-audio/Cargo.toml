@@ -5,6 +5,9 @@ authors = ["Wojtek Swiderski <wswiders@uwaterloo.ca>"]
 edition = "2018"
 
 [dependencies]
-minimp3 = "0.3"
 cpal = "0.10.0"
 itertools = "0.8"
+minimp3 = "0.3"
+num-complex = "0.2"
+num-traits = "0.2"
+rustfft = "3.0"

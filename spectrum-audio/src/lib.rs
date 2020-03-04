@@ -9,7 +9,11 @@ use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
 
 mod concurrent_tee;
+
+// Public exports
+pub mod audio_state;
 pub mod shared_data;
+pub mod transforms;
 
 use concurrent_tee::ConcurrentTee;
 use shared_data::SharedData;
