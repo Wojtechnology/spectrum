@@ -9,6 +9,7 @@ use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
 
 mod concurrent_tee;
+mod cyclical_buffer;
 
 // Public exports
 pub mod audio_state;

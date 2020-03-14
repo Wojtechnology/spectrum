@@ -203,22 +203,31 @@ impl<B: Backend> RendererState<B> {
             temp
         };
 
-        let sample_vec = user_state.shared_data.read().unwrap().get_sample();
-        let value = sample_vec[0];
+        let bands = user_state.shared_data.read().unwrap().get_bands();
+        let value = bands[0][650];
         let value_f = ((value as f32) / (i16::max_value() as f32)).abs();
 
         let duration = (user_state.start_time.elapsed().unwrap().as_nanos() as f32) / 1e9 * 60.0;
         let cursor_x = user_state.cursor_pos.x as f32 / size.width as f32;
         let cursor_y = user_state.cursor_pos.y as f32 / size.height as f32;
         let scale = value_f * 0.5 + 1.0;
+        // ROTATION
+        // let model = {
+        //     let mut model = glm::TMat4::<f32>::identity();
+        //     model = glm::rotate(
+        //         &model,
+        //         f32::to_radians(duration),
+        //         &glm::make_vec3(&[cursor_x, cursor_y, -1.0]).normalize(),
+        //     );
+        //     model = glm::scale(&model, &glm::TVec3::new(scale, scale, scale));
+        //     model = glm::translate(&model, &glm::TVec3::new(-0.5, -0.5, -0.5));
+        //     model
+        // };
+
+        // SCALE
         let model = {
             let mut model = glm::TMat4::<f32>::identity();
-            model = glm::rotate(
-                &model,
-                f32::to_radians(duration),
-                &glm::make_vec3(&[cursor_x, cursor_y, -1.0]).normalize(),
-            );
-            model = glm::scale(&model, &glm::TVec3::new(scale, scale, scale));
+            model = glm::scale(&model, &glm::TVec3::new(1.0, scale, 1.0));
             model = glm::translate(&model, &glm::TVec3::new(-0.5, -0.5, -0.5));
             model
         };
