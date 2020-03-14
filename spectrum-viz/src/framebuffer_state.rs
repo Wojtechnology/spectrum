@@ -10,7 +10,7 @@ use hal::Backend;
 
 use crate::device_state::DeviceState;
 
-const MAX_FRAMES_IN_FLIGHT: usize = 3;
+pub const MAX_FRAMES_IN_FLIGHT: usize = 3;
 
 pub struct FramebufferState<B: Backend> {
     command_pools: Vec<B::CommandPool>,
@@ -61,6 +61,7 @@ impl<B: Backend> FramebufferState<B> {
     pub fn next_frame_info(
         &mut self,
     ) -> (
+        usize,
         &mut B::CommandPool,
         &mut B::CommandBuffer,
         &B::Fence,
@@ -70,6 +71,7 @@ impl<B: Backend> FramebufferState<B> {
         self.frame_num += 1;
 
         (
+            cur_frame_idx,
             &mut self.command_pools[cur_frame_idx],
             &mut self.command_buffers[cur_frame_idx],
             &self.present_fences[cur_frame_idx],

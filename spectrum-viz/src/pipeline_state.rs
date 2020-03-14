@@ -117,13 +117,22 @@ impl<B: Backend> PipelineState<B> {
                     mask: pso::ColorMask::ALL,
                     blend: Some(pso::BlendState::ALPHA),
                 });
+
+                // Vertex buffers
                 pipeline_desc.vertex_buffers.push(pso::VertexBufferDesc {
                     binding: 0,
                     stride: size_of::<VertexData<f32>>() as u32,
                     rate: VertexInputRate::Vertex,
                 });
+                pipeline_desc.vertex_buffers.push(pso::VertexBufferDesc {
+                    binding: 1,
+                    stride: mat_size,
+                    rate: VertexInputRate::Instance(1),
+                });
 
+                // Attributes
                 pipeline_desc.attributes.push(pso::AttributeDesc {
+                    // vert_pos
                     location: 0,
                     binding: 0,
                     element: pso::Element {
@@ -132,6 +141,7 @@ impl<B: Backend> PipelineState<B> {
                     },
                 });
                 pipeline_desc.attributes.push(pso::AttributeDesc {
+                    // vert_col
                     location: 1,
                     binding: 0,
                     element: pso::Element {
@@ -140,6 +150,7 @@ impl<B: Backend> PipelineState<B> {
                     },
                 });
                 pipeline_desc.attributes.push(pso::AttributeDesc {
+                    // vert_uv
                     location: 2,
                     binding: 0,
                     element: pso::Element {
@@ -147,6 +158,18 @@ impl<B: Backend> PipelineState<B> {
                         offset: size_of::<[f32; 6]>() as u32,
                     },
                 });
+
+                for i in 0..4 {
+                    // model_col{i}
+                    pipeline_desc.attributes.push(pso::AttributeDesc {
+                        location: 3 + i,
+                        binding: 1,
+                        element: pso::Element {
+                            format: f::Format::Rgba32Sfloat,
+                            offset: i * 16,
+                        },
+                    });
+                }
 
                 device.create_graphics_pipeline(&pipeline_desc, None)
             };

@@ -12,7 +12,7 @@ pub struct SharedData {
 }
 
 // TODO: Make these configuration
-const BUFFER_SIZE: usize = 1024;
+pub const BUFFER_SIZE: usize = 1024;
 const STUTTER_SIZE: usize = BUFFER_SIZE / 8;
 
 impl SharedData {

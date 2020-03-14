@@ -19,18 +19,21 @@ use hal::window as w;
 use hal::Backend;
 use hal::IndexType;
 use nalgebra_glm as glm;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 
 use crate::backend_state::BackendState;
 use crate::buffer_state::BufferState;
 use crate::device_state::DeviceState;
-use crate::framebuffer_state::FramebufferState;
+use crate::framebuffer_state::{FramebufferState, MAX_FRAMES_IN_FLIGHT};
 use crate::gx_constant;
 use crate::gx_object::{TriIndexData, VertexData};
 use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
 use crate::screen_size_state::ScreenSizeState;
-use spectrum_audio::shared_data::SharedData;
+use spectrum_audio::shared_data::{SharedData, BUFFER_SIZE};
+
+pub const MAX_CUBES: usize = 8192;
+pub const NUM_DRAWN: usize = 32;
 
 // TODO: Move into own module
 #[derive(Copy, Clone)]
@@ -47,6 +50,16 @@ pub struct UserState {
     pub clear_color: Color<f32>,
     start_time: SystemTime,
     shared_data: Arc<RwLock<SharedData>>,
+}
+
+fn mat4_to_array(mat: glm::Mat4) -> [f32; 16] {
+    let mut arr = [0.0; 16];
+    for i in 0..4 {
+        for j in 0..4 {
+            arr[i * 4 + j] = mat[i * 4 + j];
+        }
+    }
+    arr
 }
 
 impl UserState {
@@ -70,11 +83,13 @@ pub struct RendererState<B: Backend> {
     pub backend: BackendState<B>,
     render_pass: RenderPassState<B>,
     triangle_vertex_buffer: BufferState<B>,
+    model_vertex_buffers: Vec<BufferState<B>>,
     index_buffer: BufferState<B>,
     pipeline: PipelineState<B>,
     framebuffer: FramebufferState<B>,
     device: Rc<RefCell<DeviceState<B>>>,
     screen_size_state: ScreenSizeState,
+    view_proj_mat: glm::Mat4,
 }
 
 fn create_viewport(extent: i::Extent) -> pso::Viewport {
@@ -146,6 +161,17 @@ impl<B: Backend> RendererState<B> {
             &backend.adapter.memory_types,
         );
 
+        // TODO: Clean up buffer_state to separate uploading and creation
+        let mut model_vertex_buffers = Vec::new();
+        for _ in 0..MAX_FRAMES_IN_FLIGHT {
+            model_vertex_buffers.push(BufferState::new::<[f32; 4 * 4]>(
+                Rc::clone(&device),
+                &[mat4_to_array(glm::TMat4::<f32>::identity()); MAX_CUBES][..],
+                buffer::Usage::VERTEX,
+                &backend.adapter.memory_types,
+            ));
+        }
+
         let screen_size_state = ScreenSizeState::new_default_start(backend.window.scale_factor());
         let (format, extent) =
             Self::configure_swapchain(&mut backend, Rc::clone(&device), &screen_size_state);
@@ -161,37 +187,29 @@ impl<B: Backend> RendererState<B> {
         );
 
         let viewport = create_viewport(extent);
+        let view_proj_mat = Self::compute_view_proj(screen_size_state.logical_size());
 
         RendererState {
             backend,
             device,
             triangle_vertex_buffer,
+            model_vertex_buffers,
             index_buffer,
             render_pass,
             pipeline,
             framebuffer,
             viewport,
             screen_size_state,
+            view_proj_mat,
         }
     }
 
-    fn recreate_swapchain(&mut self) {
-        let (_, extent) = Self::configure_swapchain(
-            &mut self.backend,
-            Rc::clone(&self.device),
-            &self.screen_size_state,
-        );
-        self.viewport = create_viewport(extent);
-    }
-
-    pub fn draw(&mut self, user_state: &UserState) {
+    fn compute_view_proj(size: LogicalSize<u32>) -> glm::Mat4 {
         let view = glm::look_at_lh(
             &glm::make_vec3(&[0.0, 0.0, -5.0]),
             &glm::make_vec3(&[0.0, 0.0, 0.0]),
             &glm::make_vec3(&[0.0, 1.0, 0.0]).normalize(),
         );
-
-        let size = self.screen_size_state.logical_size();
         let projection = {
             let mut temp = glm::perspective_lh_zo(
                 (size.width as f32) / (size.height as f32),
@@ -202,38 +220,20 @@ impl<B: Backend> RendererState<B> {
             temp[(1, 1)] *= -1.0;
             temp
         };
+        projection * view
+    }
 
-        let bands = user_state.shared_data.read().unwrap().get_bands();
-        let value = bands[0][650];
-        let value_f = ((value as f32) / (i16::max_value() as f32)).abs();
+    fn recreate_swapchain(&mut self) {
+        let (_, extent) = Self::configure_swapchain(
+            &mut self.backend,
+            Rc::clone(&self.device),
+            &self.screen_size_state,
+        );
+        self.viewport = create_viewport(extent);
+        self.view_proj_mat = Self::compute_view_proj(self.screen_size_state.logical_size());
+    }
 
-        let duration = (user_state.start_time.elapsed().unwrap().as_nanos() as f32) / 1e9 * 60.0;
-        let cursor_x = user_state.cursor_pos.x as f32 / size.width as f32;
-        let cursor_y = user_state.cursor_pos.y as f32 / size.height as f32;
-        let scale = value_f * 0.5 + 1.0;
-        // ROTATION
-        // let model = {
-        //     let mut model = glm::TMat4::<f32>::identity();
-        //     model = glm::rotate(
-        //         &model,
-        //         f32::to_radians(duration),
-        //         &glm::make_vec3(&[cursor_x, cursor_y, -1.0]).normalize(),
-        //     );
-        //     model = glm::scale(&model, &glm::TVec3::new(scale, scale, scale));
-        //     model = glm::translate(&model, &glm::TVec3::new(-0.5, -0.5, -0.5));
-        //     model
-        // };
-
-        // SCALE
-        let model = {
-            let mut model = glm::TMat4::<f32>::identity();
-            model = glm::scale(&model, &glm::TVec3::new(1.0, scale, 1.0));
-            model = glm::translate(&model, &glm::TVec3::new(-0.5, -0.5, -0.5));
-            model
-        };
-
-        let mvp = projection * view * model;
-
+    pub fn draw(&mut self, user_state: &UserState) {
         let surface_image = unsafe {
             match self.backend.surface.acquire_image(!0) {
                 Ok((image, _)) => image,
@@ -256,8 +256,54 @@ impl<B: Backend> RendererState<B> {
                 .unwrap()
         };
 
-        let (command_pool, cmd_buffer, present_fence, present_semaphore) =
+        let (frame_idx, command_pool, cmd_buffer, present_fence, present_semaphore) =
             self.framebuffer.next_frame_info();
+
+        let bands = user_state.shared_data.read().unwrap().get_bands();
+
+        // let duration = (user_state.start_time.elapsed().unwrap().as_nanos() as f32) / 1e9 * 60.0;
+        // let cursor_x = user_state.cursor_pos.x as f32 / size.width as f32;
+        // let cursor_y = user_state.cursor_pos.y as f32 / size.height as f32;
+        // ROTATION
+        // let model = {
+        //     let mut model = glm::TMat4::<f32>::identity();
+        //     model = glm::rotate(
+        //         &model,
+        //         f32::to_radians(duration),
+        //         &glm::make_vec3(&[cursor_x, cursor_y, -1.0]).normalize(),
+        //     );
+        //     model = glm::scale(&model, &glm::TVec3::new(scale, scale, scale));
+        //     model = glm::translate(&model, &glm::TVec3::new(-0.5, -0.5, -0.5));
+        //     model
+        // };
+
+        // SCALE
+        let mut models = Vec::new();
+        let stride_size = BUFFER_SIZE / NUM_DRAWN;
+        for model_idx in 0..NUM_DRAWN {
+            let mut total_value = 0.0;
+            for i in 0..stride_size {
+                let band_idx = model_idx * stride_size + i;
+                total_value += bands[0][band_idx];
+                total_value += bands[1][band_idx];
+            }
+            let avg_value = total_value / ((stride_size * 2) as f32);
+
+            let x_translate = 5.0 / (NUM_DRAWN as f32) * (model_idx as f32) - 2.5;
+
+            let model = {
+                let mut model = glm::TMat4::<f32>::identity();
+                model = glm::translate(&model, &glm::TVec3::new(x_translate, -1.5, 0.0));
+                model = glm::scale(&model, &glm::TVec3::new(0.1, avg_value / 8192.0, 1.0));
+                model = glm::translate(&model, &glm::TVec3::new(-0.5, 0.0, -0.5));
+                model
+            };
+            models.push(model);
+        }
+        let model_arrays: Vec<_> = models.iter().map(|&mat| mat4_to_array(mat)).collect();
+
+        let model_vertex_buffer = &mut self.model_vertex_buffers[frame_idx];
+        model_vertex_buffer.update_data(0, &model_arrays[..]);
 
         unsafe {
             self.device
@@ -276,7 +322,13 @@ impl<B: Backend> RendererState<B> {
             cmd_buffer.set_viewports(0, &[self.viewport.clone()]);
             cmd_buffer.set_scissors(0, &[self.viewport.rect]);
             cmd_buffer.bind_graphics_pipeline(self.pipeline.pipeline.as_ref().unwrap());
-            cmd_buffer.bind_vertex_buffers(0, Some((self.triangle_vertex_buffer.get_buffer(), 0)));
+            cmd_buffer.bind_vertex_buffers(
+                0,
+                vec![
+                    (self.triangle_vertex_buffer.get_buffer(), 0),
+                    (model_vertex_buffer.get_buffer(), 0),
+                ],
+            );
             cmd_buffer.bind_index_buffer(buffer::IndexBufferView {
                 buffer: self.index_buffer.get_buffer(),
                 offset: 0,
@@ -286,7 +338,7 @@ impl<B: Backend> RendererState<B> {
                 self.pipeline.pipeline_layout.as_ref().unwrap(),
                 ShaderStageFlags::VERTEX,
                 0,
-                cast_slice::<f32, u32>(&mvp.data),
+                cast_slice::<f32, u32>(&self.view_proj_mat.data),
             );
 
             cmd_buffer.begin_render_pass(
@@ -305,7 +357,7 @@ impl<B: Backend> RendererState<B> {
                 }],
                 command::SubpassContents::Inline,
             );
-            cmd_buffer.draw_indexed(0..36, 0, 0..1);
+            cmd_buffer.draw_indexed(0..36, 0, 0..(NUM_DRAWN as u32));
             cmd_buffer.end_render_pass();
             cmd_buffer.finish();
 
