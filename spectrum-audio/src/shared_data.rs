@@ -13,7 +13,7 @@ pub struct SharedData {
 
 // TODO: Make these configuration
 pub const BUFFER_SIZE: usize = 1024;
-const STUTTER_SIZE: usize = BUFFER_SIZE / 8;
+const STUTTER_SIZE: usize = BUFFER_SIZE / 2;
 
 impl SharedData {
     pub fn new(channels: usize) -> Self {

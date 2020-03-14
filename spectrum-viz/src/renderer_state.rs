@@ -33,7 +33,9 @@ use crate::screen_size_state::ScreenSizeState;
 use spectrum_audio::shared_data::{SharedData, BUFFER_SIZE};
 
 pub const MAX_CUBES: usize = 8192;
-pub const NUM_DRAWN: usize = 32;
+pub const NUM_DRAWN: usize = 128;
+pub const DISPLAY_WIDTH: f32 = 5.5;
+pub const VERT_SCALE: f32 = 8192.0;
 
 // TODO: Move into own module
 #[derive(Copy, Clone)]
@@ -280,6 +282,7 @@ impl<B: Backend> RendererState<B> {
         // SCALE
         let mut models = Vec::new();
         let stride_size = BUFFER_SIZE / NUM_DRAWN;
+        let bar_width = DISPLAY_WIDTH / (NUM_DRAWN as f32);
         for model_idx in 0..NUM_DRAWN {
             let mut total_value = 0.0;
             for i in 0..stride_size {
@@ -289,12 +292,15 @@ impl<B: Backend> RendererState<B> {
             }
             let avg_value = total_value / ((stride_size * 2) as f32);
 
-            let x_translate = 5.0 / (NUM_DRAWN as f32) * (model_idx as f32) - 2.5;
+            let x_translate = bar_width * (model_idx as f32) - DISPLAY_WIDTH / 2.0;
 
             let model = {
                 let mut model = glm::TMat4::<f32>::identity();
-                model = glm::translate(&model, &glm::TVec3::new(x_translate, -1.5, 0.0));
-                model = glm::scale(&model, &glm::TVec3::new(0.1, avg_value / 8192.0, 1.0));
+                model = glm::translate(&model, &glm::TVec3::new(x_translate, -1.8, 0.0));
+                model = glm::scale(
+                    &model,
+                    &glm::TVec3::new(bar_width, avg_value / VERT_SCALE, 1.0),
+                );
                 model = glm::translate(&model, &glm::TVec3::new(-0.5, 0.0, -0.5));
                 model
             };
