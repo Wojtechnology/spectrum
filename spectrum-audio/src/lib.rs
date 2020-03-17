@@ -12,13 +12,12 @@ use crate::transforms::{
 
 mod concurrent_tee;
 mod cyclical_buffer;
+mod transforms;
 
 // Public exports
-pub mod audio_state;
 pub mod mp3;
 pub mod raw_stream;
 pub mod shared_data;
-pub mod transforms;
 
 use concurrent_tee::ConcurrentTee;
 use raw_stream::RawStream;
