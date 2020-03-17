@@ -1,8 +1,6 @@
 use crate::cyclical_buffer::CyclicalBuffer;
 use crate::transforms::{FFTtransformer, Transformer};
 
-use num_complex::Complex;
-
 pub struct SharedData {
     channel_bufs: Vec<CyclicalBuffer<i16>>,
     starting_cursor: usize,
@@ -33,18 +31,8 @@ impl SharedData {
     fn update_cur_bands(&mut self) {
         self.cur_bands = Vec::with_capacity(self.channel_bufs.len());
         for buf in self.channel_bufs.iter() {
-            let input: Vec<_> = buf
-                .get_values()
-                .iter()
-                .map(|&v| Complex::new(v as f32, 0.0))
-                .collect();
-            let output: Vec<_> = self
-                .transformer
-                .transform(input)
-                .iter()
-                .map(|c| (c.re * c.re + c.im * c.im).sqrt())
-                .collect();
-            self.cur_bands.push(output);
+            let input: Vec<_> = buf.get_values().iter().map(|&v| v as f32).collect();
+            self.cur_bands.push(self.transformer.transform(input));
         }
     }
 
