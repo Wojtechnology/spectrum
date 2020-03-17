@@ -5,9 +5,10 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 
 use spectrum_audio::mp3::Mp3Decoder;
+use spectrum_audio::raw_stream::RawStream;
 use spectrum_audio::run_audio_loop;
 use spectrum_audio::shared_data::SharedData;
-use spectrum_audio::RawStream;
+use spectrum_audio::BUFFER_SIZE;
 use spectrum_viz::event_loop;
 
 fn main() {
@@ -32,7 +33,10 @@ fn main() {
         process::exit(1);
     });
 
-    let shared_data = Arc::new(RwLock::new(SharedData::new(decoder.channels())));
+    let shared_data = Arc::new(RwLock::new(SharedData::new(
+        decoder.channels(),
+        BUFFER_SIZE,
+    )));
     let shared_data_clone = shared_data.clone();
 
     thread::spawn(move || {

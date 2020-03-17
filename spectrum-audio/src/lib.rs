@@ -1,6 +1,3 @@
-use std::error::Error;
-use std::fmt;
-use std::io;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -8,135 +5,28 @@ use std::time::{Duration, SystemTime};
 use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
 
+use crate::transforms::{
+    FFTtransformer, I16ToF32Transformer, OptionalPipelineTransformer, StutterAggregatorTranformer,
+    Transformer, VectorTransformer,
+};
+
 mod concurrent_tee;
 mod cyclical_buffer;
 
 // Public exports
 pub mod audio_state;
+pub mod mp3;
+pub mod raw_stream;
 pub mod shared_data;
 pub mod transforms;
 
 use concurrent_tee::ConcurrentTee;
+use raw_stream::RawStream;
 use shared_data::SharedData;
 
-#[derive(Debug)]
-pub enum DecoderError {
-    Io(io::Error),
-    Application(&'static str),
-    IllFormed,
-    Empty,
-}
-
-impl fmt::Display for DecoderError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            DecoderError::Io(io_err) => write!(f, "Error when reading file: {}", io_err),
-            DecoderError::Application(s) => write!(f, "Application error: {}", s),
-            DecoderError::IllFormed => write!(f, "File is illformed"),
-            DecoderError::Empty => write!(f, "File is empty"),
-        }
-    }
-}
-
-impl Error for DecoderError {
-    fn description(&self) -> &str {
-        match self {
-            DecoderError::Io(_) => "Error when reading file",
-            DecoderError::Application(_) => "Application error",
-            DecoderError::IllFormed => "File is illformed",
-            DecoderError::Empty => "File is empty",
-        }
-    }
-}
-
-pub trait RawStream<T>: Iterator<Item = T> + Send {
-    fn channels(&self) -> usize;
-    fn sample_rate(&self) -> i32;
-}
-
-pub mod mp3 {
-    use std::io::Read;
-
-    use minimp3::{Decoder, Error as Mp3Error, Frame};
-
-    use super::{DecoderError, RawStream};
-
-    pub struct Mp3Decoder<R: Send> {
-        decoder: Decoder<R>,
-        current_frame: Frame,
-        current_frame_offset: usize,
-        frame_index: usize,
-    }
-
-    impl<R> Mp3Decoder<R>
-    where
-        R: Read + Send,
-    {
-        pub fn new(reader: R) -> Result<Mp3Decoder<R>, DecoderError> {
-            let mut decoder = Decoder::new(reader);
-            let current_frame = loop {
-                match decoder.next_frame() {
-                    Ok(frame) => {
-                        break Ok(frame);
-                    }
-                    Err(Mp3Error::Io(err)) => break Err(DecoderError::Io(err)),
-                    Err(Mp3Error::InsufficientData) => {
-                        break Err(DecoderError::Application("Insufficient data"))
-                    }
-                    Err(Mp3Error::Eof) => break Err(DecoderError::Empty),
-                    Err(Mp3Error::SkippedData) => continue,
-                }
-            }?;
-
-            Ok(Mp3Decoder {
-                decoder,
-                current_frame,
-                current_frame_offset: 0,
-                frame_index: 0,
-            })
-        }
-    }
-
-    impl<R> Iterator for Mp3Decoder<R>
-    where
-        R: Read + Send,
-    {
-        type Item = i16;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.current_frame_offset == self.current_frame.data.len() {
-                self.current_frame_offset = 0;
-                match self.decoder.next_frame() {
-                    Ok(frame) => {
-                        // NOTE: We assume that the sample rate and channels of the song stays the
-                        // same throughout. Should add a debug test here to check if this is
-                        // actually the case
-                        self.current_frame = frame;
-                        self.frame_index += 1;
-                    }
-                    Err(_) => return None,
-                }
-            }
-
-            let v = self.current_frame.data[self.current_frame_offset];
-            self.current_frame_offset += 1;
-            Some(v)
-        }
-    }
-
-    impl<R> RawStream<i16> for Mp3Decoder<R>
-    where
-        R: Read + Send,
-    {
-        fn channels(&self) -> usize {
-            self.current_frame.channels
-        }
-
-        fn sample_rate(&self) -> i32 {
-            self.current_frame.sample_rate
-        }
-    }
-}
+// TODO: Make these configuration
+pub const BUFFER_SIZE: usize = 1024;
+const STUTTER_SIZE: usize = BUFFER_SIZE / 2;
 
 fn find_format_with_sample_rate<D: RawStream<i16>>(
     decoder: &D,
@@ -179,20 +69,42 @@ impl IdxBounds {
 fn push_sample<I: Iterator<Item = i16>>(
     iter: &mut I,
     cur_idx: &mut u64,
-    channels: usize,
+    channel_transformers: &mut Vec<Box<dyn Transformer<Input = i16, Output = Option<Vec<f32>>>>>,
     shared_data: Arc<RwLock<SharedData>>,
 ) -> bool {
-    let mut sample = Vec::<i16>::with_capacity(channels);
-    for _ in 0..channels {
+    for (channel_idx, channel_transformer) in channel_transformers.iter_mut().enumerate() {
         *cur_idx += 1;
         match iter.next() {
-            Some(v) => sample.push(v),
+            Some(input) => match channel_transformer.transform(input) {
+                Some(output) => {
+                    let mut data = shared_data.write().unwrap();
+                    data.set_bands_at(channel_idx, output);
+                }
+                None => (),
+            },
             None => return false,
         }
     }
-    let mut data = shared_data.write().unwrap();
-    data.set_sample(sample);
     return true;
+}
+
+fn build_transformer(
+    buffer_size: usize,
+    stutter_size: usize,
+) -> Box<dyn Transformer<Input = i16, Output = Option<Vec<f32>>>> {
+    let stutter_transformer = StutterAggregatorTranformer::<i16>::new(buffer_size, stutter_size);
+    let i16_to_f32_transformer = I16ToF32Transformer::new();
+    let itf_vec_tranformer = VectorTransformer::new(Box::new(i16_to_f32_transformer));
+    let fft_transformer = FFTtransformer::<f32>::new(buffer_size);
+    let opt_pl_transformer_one = OptionalPipelineTransformer::new(
+        Box::new(stutter_transformer),
+        Box::new(itf_vec_tranformer),
+    );
+    let opt_pl_transformer_two = OptionalPipelineTransformer::new(
+        Box::new(opt_pl_transformer_one),
+        Box::new(fft_transformer),
+    );
+    Box::new(opt_pl_transformer_two)
 }
 
 pub fn run_audio_loop<D: RawStream<i16> + 'static>(
@@ -224,19 +136,35 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
     thread::spawn(move || {
         let mut cur_idx: u64 = 0;
         let mut last_time = SystemTime::now();
+
+        let mut channel_transformers = Vec::with_capacity(channels);
+        for _ in 0..channels {
+            channel_transformers.push(build_transformer(BUFFER_SIZE, STUTTER_SIZE));
+        }
+
         loop {
             let (lower_bound, upper_bound) = {
                 let bounds = idx_bounds_one.read().unwrap();
                 (bounds.lower_bound, bounds.upper_bound)
             };
             while cur_idx < lower_bound {
-                if !push_sample(&mut decoder_b, &mut cur_idx, channels, shared_data.clone()) {
-                    break;
+                if !push_sample(
+                    &mut decoder_b,
+                    &mut cur_idx,
+                    &mut channel_transformers,
+                    shared_data.clone(),
+                ) {
+                    return;
                 }
             }
             if cur_idx < upper_bound {
-                if !push_sample(&mut decoder_b, &mut cur_idx, channels, shared_data.clone()) {
-                    break;
+                if !push_sample(
+                    &mut decoder_b,
+                    &mut cur_idx,
+                    &mut channel_transformers,
+                    shared_data.clone(),
+                ) {
+                    return;
                 }
             }
 

@@ -30,7 +30,8 @@ use crate::gx_object::{TriIndexData, VertexData};
 use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
 use crate::screen_size_state::ScreenSizeState;
-use spectrum_audio::shared_data::{SharedData, BUFFER_SIZE};
+use spectrum_audio::shared_data::SharedData;
+use spectrum_audio::BUFFER_SIZE;
 
 pub const MAX_CUBES: usize = 8192;
 pub const NUM_DRAWN: usize = 128;
