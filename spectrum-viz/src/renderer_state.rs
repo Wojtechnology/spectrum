@@ -31,10 +31,8 @@ use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
 use crate::screen_size_state::ScreenSizeState;
 use spectrum_audio::shared_data::SharedData;
-use spectrum_audio::BUFFER_SIZE;
 
 pub const MAX_CUBES: usize = 8192;
-pub const NUM_DRAWN: usize = 128;
 pub const DISPLAY_WIDTH: f32 = 5.5;
 pub const VERT_SCALE: f32 = 8192.0;
 
@@ -264,35 +262,10 @@ impl<B: Backend> RendererState<B> {
 
         let bands = user_state.shared_data.read().unwrap().get_bands();
 
-        // let duration = (user_state.start_time.elapsed().unwrap().as_nanos() as f32) / 1e9 * 60.0;
-        // let cursor_x = user_state.cursor_pos.x as f32 / size.width as f32;
-        // let cursor_y = user_state.cursor_pos.y as f32 / size.height as f32;
-        // ROTATION
-        // let model = {
-        //     let mut model = glm::TMat4::<f32>::identity();
-        //     model = glm::rotate(
-        //         &model,
-        //         f32::to_radians(duration),
-        //         &glm::make_vec3(&[cursor_x, cursor_y, -1.0]).normalize(),
-        //     );
-        //     model = glm::scale(&model, &glm::TVec3::new(scale, scale, scale));
-        //     model = glm::translate(&model, &glm::TVec3::new(-0.5, -0.5, -0.5));
-        //     model
-        // };
-
         // SCALE
         let mut models = Vec::new();
-        let stride_size = BUFFER_SIZE / NUM_DRAWN;
-        let bar_width = DISPLAY_WIDTH / (NUM_DRAWN as f32);
-        for model_idx in 0..NUM_DRAWN {
-            let mut total_value = 0.0;
-            for i in 0..stride_size {
-                let band_idx = model_idx * stride_size + i;
-                total_value += bands[0][band_idx];
-                total_value += bands[1][band_idx];
-            }
-            let avg_value = total_value / ((stride_size * 2) as f32);
-
+        let bar_width = DISPLAY_WIDTH / (bands.len() as f32);
+        for (model_idx, &avg_value) in bands.iter().enumerate() {
             let x_translate = bar_width * (model_idx as f32) - DISPLAY_WIDTH / 2.0;
 
             let model = {
@@ -364,7 +337,7 @@ impl<B: Backend> RendererState<B> {
                 }],
                 command::SubpassContents::Inline,
             );
-            cmd_buffer.draw_indexed(0..36, 0, 0..(NUM_DRAWN as u32));
+            cmd_buffer.draw_indexed(0..36, 0, 0..(bands.len() as u32));
             cmd_buffer.end_render_pass();
             cmd_buffer.finish();
 

@@ -6,8 +6,9 @@ use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
 
 use crate::transforms::{
-    FFTtransformer, I16ToF32Transformer, OptionalPipelineTransformer, StutterAggregatorTranformer,
-    Transformer, VectorTransformer,
+    F32AverageTransformer, F32WindowAverageTransformer, FFTtransformer, I16ToF32Transformer,
+    OptionalPipelineTransformer, StutterAggregatorTranformer, Transformer, VectorCacheTransformer,
+    VectorTransformer, ZipTransformer,
 };
 
 mod concurrent_tee;
@@ -26,6 +27,7 @@ use shared_data::SharedData;
 // TODO: Make these configuration
 pub const BUFFER_SIZE: usize = 1024;
 const STUTTER_SIZE: usize = BUFFER_SIZE / 2;
+const WINDOW_SIZE: usize = 8;
 
 fn find_format_with_sample_rate<D: RawStream<i16>>(
     decoder: &D,
@@ -68,42 +70,71 @@ impl IdxBounds {
 fn push_sample<I: Iterator<Item = i16>>(
     iter: &mut I,
     cur_idx: &mut u64,
-    channel_transformers: &mut Vec<Box<dyn Transformer<Input = i16, Output = Option<Vec<f32>>>>>,
+    channels: usize,
+    transformer: &mut Box<dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>>,
     shared_data: Arc<RwLock<SharedData>>,
 ) -> bool {
-    for (channel_idx, channel_transformer) in channel_transformers.iter_mut().enumerate() {
+    let mut sample = Vec::with_capacity(channels);
+    for _ in 0..channels {
         *cur_idx += 1;
         match iter.next() {
-            Some(input) => match channel_transformer.transform(input) {
-                Some(output) => {
-                    let mut data = shared_data.write().unwrap();
-                    data.set_bands_at(channel_idx, output);
-                }
-                None => (),
-            },
+            Some(input) => sample.push(input),
             None => return false,
         }
+    }
+
+    match transformer.transform(sample) {
+        Some(output) => {
+            let mut data = shared_data.write().unwrap();
+            data.set_bands(output);
+        }
+        None => {}
     }
     return true;
 }
 
 fn build_transformer(
+    channel_size: usize,
     buffer_size: usize,
     stutter_size: usize,
-) -> Box<dyn Transformer<Input = i16, Output = Option<Vec<f32>>>> {
-    let stutter_transformer = StutterAggregatorTranformer::<i16>::new(buffer_size, stutter_size);
-    let i16_to_f32_transformer = I16ToF32Transformer::new();
-    let itf_vec_tranformer = VectorTransformer::new(Box::new(i16_to_f32_transformer));
-    let fft_transformer = FFTtransformer::<f32>::new(buffer_size);
-    let opt_pl_transformer_one = OptionalPipelineTransformer::new(
-        Box::new(stutter_transformer),
-        Box::new(itf_vec_tranformer),
-    );
-    let opt_pl_transformer_two = OptionalPipelineTransformer::new(
-        Box::new(opt_pl_transformer_one),
-        Box::new(fft_transformer),
-    );
-    Box::new(opt_pl_transformer_two)
+    window_size: usize,
+) -> Box<dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>> {
+    let mut band_transformers: Vec<Box<dyn Transformer<Input = i16, Output = Option<Vec<f32>>>>> =
+        Vec::with_capacity(channel_size);
+    for _ in 0..channel_size {
+        let stutter_transformer =
+            StutterAggregatorTranformer::<i16>::new(buffer_size, stutter_size);
+        let i16_to_f32_transformer = I16ToF32Transformer::new();
+        let itf_vec_tranformer = VectorTransformer::new(Box::new(i16_to_f32_transformer));
+        let fft_transformer = FFTtransformer::<f32>::new(buffer_size);
+        let f32_window_transformer = F32WindowAverageTransformer::new(window_size);
+
+        let opt_pl_transformer_one = OptionalPipelineTransformer::new(
+            Box::new(stutter_transformer),
+            Box::new(itf_vec_tranformer),
+        );
+        let opt_pl_transformer_two = OptionalPipelineTransformer::new(
+            Box::new(opt_pl_transformer_one),
+            Box::new(fft_transformer),
+        );
+        let opt_pl_transformer_three = OptionalPipelineTransformer::new(
+            Box::new(opt_pl_transformer_two),
+            Box::new(f32_window_transformer),
+        );
+
+        band_transformers.push(Box::new(opt_pl_transformer_three))
+    }
+    let cache_transformer =
+        VectorCacheTransformer::new(band_transformers, vec![0.0; buffer_size / window_size]);
+    let zip_transformer = ZipTransformer::new();
+    let avg_transformer = VectorTransformer::new(Box::new(F32AverageTransformer::new()));
+
+    let opt_pl_transformer =
+        OptionalPipelineTransformer::new(Box::new(cache_transformer), Box::new(zip_transformer));
+    Box::new(OptionalPipelineTransformer::new(
+        Box::new(opt_pl_transformer),
+        Box::new(avg_transformer),
+    ))
 }
 
 pub fn run_audio_loop<D: RawStream<i16> + 'static>(
@@ -136,10 +167,7 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
         let mut cur_idx: u64 = 0;
         let mut last_time = SystemTime::now();
 
-        let mut channel_transformers = Vec::with_capacity(channels);
-        for _ in 0..channels {
-            channel_transformers.push(build_transformer(BUFFER_SIZE, STUTTER_SIZE));
-        }
+        let mut transformer = build_transformer(channels, BUFFER_SIZE, STUTTER_SIZE, WINDOW_SIZE);
 
         loop {
             let (lower_bound, upper_bound) = {
@@ -150,7 +178,8 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
                 if !push_sample(
                     &mut decoder_b,
                     &mut cur_idx,
-                    &mut channel_transformers,
+                    channels,
+                    &mut transformer,
                     shared_data.clone(),
                 ) {
                     return;
@@ -160,7 +189,8 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
                 if !push_sample(
                     &mut decoder_b,
                     &mut cur_idx,
-                    &mut channel_transformers,
+                    channels,
+                    &mut transformer,
                     shared_data.clone(),
                 ) {
                     return;

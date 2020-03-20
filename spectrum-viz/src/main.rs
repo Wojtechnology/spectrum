@@ -33,10 +33,7 @@ fn main() {
         process::exit(1);
     });
 
-    let shared_data = Arc::new(RwLock::new(SharedData::new(
-        decoder.channels(),
-        BUFFER_SIZE,
-    )));
+    let shared_data = Arc::new(RwLock::new(SharedData::new(128)));
     let shared_data_clone = shared_data.clone();
 
     thread::spawn(move || {

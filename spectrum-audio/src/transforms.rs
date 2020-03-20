@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use num_complex::Complex;
@@ -152,24 +153,24 @@ impl Transformer for I16ToF32Transformer {
 
 // BEGIN: VectorTransformer
 
-pub struct VectorTransformer<I: Copy, O: Copy> {
+pub struct VectorTransformer<I, O: Clone> {
     transformer: Box<dyn Transformer<Input = I, Output = O>>,
 }
 
-impl<I: Copy, O: Copy> VectorTransformer<I, O> {
+impl<I: Clone, O: Copy> VectorTransformer<I, O> {
     pub fn new(transformer: Box<dyn Transformer<Input = I, Output = O>>) -> Self {
         Self { transformer }
     }
 }
 
-impl<I: Copy, O: Copy> Transformer for VectorTransformer<I, O> {
+impl<I: Clone, O: Copy> Transformer for VectorTransformer<I, O> {
     type Input = Vec<I>;
     type Output = Vec<O>;
 
     fn transform(&mut self, input: Vec<I>) -> Vec<O> {
         input
             .iter()
-            .map(|v| self.transformer.transform(*v))
+            .map(|v| self.transformer.transform(v.clone()))
             .collect()
     }
 }
@@ -208,3 +209,165 @@ impl<I, M, O> Transformer for OptionalPipelineTransformer<I, M, O> {
 }
 
 // END: OptionalPipelineTransformer
+
+// BEGIN: VectorCacheTransformer
+
+pub struct VectorCacheTransformer<I: Copy, O: Clone> {
+    transformers: Vec<Box<dyn Transformer<Input = I, Output = Option<O>>>>,
+    cache: Vec<O>,
+}
+
+impl<I: Copy, O: Clone> VectorCacheTransformer<I, O> {
+    pub fn new(
+        transformers: Vec<Box<dyn Transformer<Input = I, Output = Option<O>>>>,
+        default_value: O,
+    ) -> Self {
+        let mut cache = Vec::with_capacity(transformers.len());
+        for _ in 0..transformers.len() {
+            cache.push(default_value.clone());
+        }
+        Self {
+            transformers,
+            cache,
+        }
+    }
+}
+
+impl<I: Copy, O: Clone> Transformer for VectorCacheTransformer<I, O> {
+    type Input = Vec<I>;
+    type Output = Option<Vec<O>>;
+
+    fn transform(&mut self, input: Vec<I>) -> Option<Vec<O>> {
+        assert!(
+            input.len() == self.transformers.len(),
+            "Input length must be same as length of tranformers"
+        );
+        let mut has_update = false;
+        let mut idx = 0;
+        for (input_val, transformer) in input.iter().zip(self.transformers.iter_mut()) {
+            match transformer.transform(*input_val) {
+                Some(output_val) => {
+                    has_update = true;
+                    self.cache[idx] = output_val;
+                }
+                None => {}
+            }
+            idx += 1;
+        }
+
+        if has_update {
+            Some(self.cache.clone())
+        } else {
+            None
+        }
+    }
+}
+
+// END: VectorCacheTransformer
+
+// BEGIN: F32WindowAverageTransformer
+
+pub struct F32WindowAverageTransformer {
+    window_size: usize,
+}
+
+impl F32WindowAverageTransformer {
+    pub fn new(window_size: usize) -> Self {
+        assert!(window_size > 0, "window_size must be greater than 0");
+        Self { window_size }
+    }
+}
+
+impl Transformer for F32WindowAverageTransformer {
+    type Input = Vec<f32>;
+    type Output = Vec<f32>;
+
+    fn transform(&mut self, input: Vec<f32>) -> Vec<f32> {
+        let input_len = input.len();
+        assert!(
+            input_len % self.window_size == 0,
+            "Length of input must be divisible by window_size"
+        );
+        let num_windows = input_len / self.window_size;
+        let mut output = Vec::with_capacity(num_windows);
+        for window_idx in 0..num_windows {
+            let mut total = 0.0;
+            for offset in 0..self.window_size {
+                total += input[self.window_size * window_idx + offset];
+            }
+            output.push(total / (self.window_size as f32));
+        }
+        output
+    }
+}
+
+// END: F32WindowAverageTransformer
+
+// BEGIN: F32AverageTransformer
+
+pub struct F32AverageTransformer {}
+
+impl F32AverageTransformer {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Transformer for F32AverageTransformer {
+    type Input = Vec<f32>;
+    type Output = f32;
+
+    fn transform(&mut self, input: Vec<f32>) -> f32 {
+        assert!(input.len() > 0, "input must be non-empty");
+        let mut total = 0.0;
+        for &input_val in input.iter() {
+            total += input_val;
+        }
+        return total / (input.len() as f32);
+    }
+}
+
+// END: F32AverageTransformer
+
+// BEGIN: ZipTransformer
+
+pub struct ZipTransformer<T: Copy> {
+    phantom: PhantomData<T>,
+}
+
+impl<T: Copy> ZipTransformer<T> {
+    pub fn new() -> Self {
+        Self {
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: Copy> Transformer for ZipTransformer<T> {
+    type Input = Vec<Vec<T>>;
+    type Output = Vec<Vec<T>>;
+
+    fn transform(&mut self, input: Vec<Vec<T>>) -> Vec<Vec<T>> {
+        let n = input.len();
+        if n == 0 {
+            return input;
+        }
+        let m = input[0].len();
+
+        let mut output = Vec::with_capacity(m);
+        for _ in 0..m {
+            output.push(Vec::with_capacity(n));
+        }
+
+        for i in 0..n {
+            assert!(input[i].len() == m, "Mismatched length for row");
+            for j in 0..m {
+                output[j].push(input[i][j]);
+            }
+        }
+
+        output
+    }
+}
+
+// END: ZipTransformer
