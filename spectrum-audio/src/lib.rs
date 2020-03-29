@@ -149,25 +149,32 @@ fn build_spectrogram_transformer(
     );
     let zip_transformer = ZipTransformer::new();
     let avg_transformer = VectorTransformer::new(Box::new(F32AverageTransformer::new()));
-    let norm_transformer = F32NormalizeByLogTransformer::new();
 
     let opt_pl_transformer_1 =
         OptionalPipelineTransformer::new(Box::new(cache_transformer), Box::new(zip_transformer));
     let opt_pl_transformer_2 =
         OptionalPipelineTransformer::new(Box::new(opt_pl_transformer_1), Box::new(avg_transformer));
-    let opt_pl_transformer_3 = OptionalPipelineTransformer::new(
-        Box::new(opt_pl_transformer_2),
-        Box::new(norm_transformer),
-    );
+    let opt_pl_transformer_3_boxed: Box<
+        dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>,
+    > = if spectrogram_config.log_scaling {
+        let norm_transformer = F32NormalizeByLogTransformer::new();
+        Box::new(OptionalPipelineTransformer::new(
+            Box::new(opt_pl_transformer_2),
+            Box::new(norm_transformer),
+        ))
+    } else {
+        Box::new(opt_pl_transformer_2)
+    };
+
     match spectrogram_config.band_subset {
         Some(subset) => {
             let sub_transformer = VectorSubTransformer::new(subset.start, subset.end);
             Box::new(OptionalPipelineTransformer::new(
-                Box::new(opt_pl_transformer_3),
+                opt_pl_transformer_3_boxed,
                 Box::new(sub_transformer),
             ))
         }
-        None => Box::new(opt_pl_transformer_3),
+        None => opt_pl_transformer_3_boxed,
     }
 }
 

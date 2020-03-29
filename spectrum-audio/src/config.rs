@@ -24,6 +24,8 @@ pub struct SpectrogramConfig {
     // so that you pick up only the positive coefficients. Note that this is applied AFTER
     // windowing.
     pub band_subset: Option<SubsetConfig>,
+    // Scale the output of the FFT logarithmically.
+    pub log_scaling: bool,
 }
 
 fn assertion(cond: bool, err_msg: &str) -> Result<(), String> {
