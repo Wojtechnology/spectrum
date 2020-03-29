@@ -8,7 +8,7 @@ use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
 use crate::transforms::{
     F32AverageTransformer, F32WindowAverageTransformer, FFTtransformer, I16ToF32Transformer,
     OptionalPipelineTransformer, StutterAggregatorTranformer, Transformer, VectorCacheTransformer,
-    VectorTransformer, ZipTransformer,
+    VectorSubTransformer, VectorTransformer, ZipTransformer,
 };
 
 mod concurrent_tee;
@@ -22,13 +22,9 @@ pub mod raw_stream;
 pub mod shared_data;
 
 use concurrent_tee::ConcurrentTee;
+use config::Config;
 use raw_stream::RawStream;
 use shared_data::SharedData;
-
-// TODO: Make these configuration
-pub const BUFFER_SIZE: usize = 1024;
-const STUTTER_SIZE: usize = BUFFER_SIZE / 2;
-const WINDOW_SIZE: usize = 1;
 
 fn find_format_with_sample_rate<D: RawStream<i16>>(
     decoder: &D,
@@ -94,21 +90,21 @@ fn push_sample<I: Iterator<Item = i16>>(
     return true;
 }
 
-fn build_transformer(
+fn build_spectrogram_transformer(
+    config: Config,
     channel_size: usize,
-    buffer_size: usize,
-    stutter_size: usize,
-    window_size: usize,
 ) -> Box<dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>> {
+    let spectrogram_config = config.spectrogram;
     let mut band_transformers: Vec<Box<dyn Transformer<Input = i16, Output = Option<Vec<f32>>>>> =
         Vec::with_capacity(channel_size);
     for _ in 0..channel_size {
-        let stutter_transformer =
-            StutterAggregatorTranformer::<i16>::new(buffer_size, stutter_size);
+        let stutter_transformer = StutterAggregatorTranformer::<i16>::new(
+            spectrogram_config.buffer_size,
+            spectrogram_config.stutter_size,
+        );
         let i16_to_f32_transformer = I16ToF32Transformer::new();
         let itf_vec_tranformer = VectorTransformer::new(Box::new(i16_to_f32_transformer));
-        let fft_transformer = FFTtransformer::<f32>::new(buffer_size);
-        let f32_window_transformer = F32WindowAverageTransformer::new(window_size);
+        let fft_transformer = FFTtransformer::<f32>::new(spectrogram_config.buffer_size);
 
         let opt_pl_transformer_one = OptionalPipelineTransformer::new(
             Box::new(stutter_transformer),
@@ -118,29 +114,49 @@ fn build_transformer(
             Box::new(opt_pl_transformer_one),
             Box::new(fft_transformer),
         );
-        let opt_pl_transformer_three = OptionalPipelineTransformer::new(
-            Box::new(opt_pl_transformer_two),
-            Box::new(f32_window_transformer),
-        );
 
-        band_transformers.push(Box::new(opt_pl_transformer_three))
+        let band_transformer = if spectrogram_config.window_size > 1 {
+            let f32_window_transformer =
+                F32WindowAverageTransformer::new(spectrogram_config.window_size);
+            OptionalPipelineTransformer::new(
+                Box::new(opt_pl_transformer_two),
+                Box::new(f32_window_transformer),
+            )
+        } else {
+            opt_pl_transformer_two
+        };
+
+        band_transformers.push(Box::new(band_transformer))
     }
-    let cache_transformer =
-        VectorCacheTransformer::new(band_transformers, vec![0.0; buffer_size / window_size]);
+    let cache_transformer = VectorCacheTransformer::new(
+        band_transformers,
+        vec![0.0; spectrogram_config.buffer_size / spectrogram_config.window_size],
+    );
     let zip_transformer = ZipTransformer::new();
     let avg_transformer = VectorTransformer::new(Box::new(F32AverageTransformer::new()));
 
-    let opt_pl_transformer =
+    let opt_pl_transformer_one =
         OptionalPipelineTransformer::new(Box::new(cache_transformer), Box::new(zip_transformer));
-    Box::new(OptionalPipelineTransformer::new(
-        Box::new(opt_pl_transformer),
+    let opt_pl_transformer_two = OptionalPipelineTransformer::new(
+        Box::new(opt_pl_transformer_one),
         Box::new(avg_transformer),
-    ))
+    );
+    match spectrogram_config.band_subset {
+        Some(subset) => {
+            let sub_transformer = VectorSubTransformer::new(subset.start, subset.end);
+            Box::new(OptionalPipelineTransformer::new(
+                Box::new(opt_pl_transformer_two),
+                Box::new(sub_transformer),
+            ))
+        }
+        None => Box::new(opt_pl_transformer_two),
+    }
 }
 
 pub fn run_audio_loop<D: RawStream<i16> + 'static>(
     decoder: D,
     shared_data: Arc<RwLock<SharedData>>,
+    config: Config,
 ) {
     // Set up stream
     let host = cpal::default_host();
@@ -168,7 +184,7 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
         let mut cur_idx: u64 = 0;
         let mut last_time = SystemTime::now();
 
-        let mut transformer = build_transformer(channels, BUFFER_SIZE, STUTTER_SIZE, WINDOW_SIZE);
+        let mut transformer = build_spectrogram_transformer(config, channels);
 
         loop {
             let (lower_bound, upper_bound) = {

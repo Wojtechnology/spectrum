@@ -264,10 +264,9 @@ impl<B: Backend> RendererState<B> {
 
         // SCALE
         let mut models = Vec::new();
-        let num_to_keep: usize = 512;
-        let bar_width = DISPLAY_WIDTH / (num_to_keep as f32);
+        let bar_width = DISPLAY_WIDTH / (bands.len() as f32);
         let mut max_val = 0.0;
-        for (model_idx, &avg_value) in bands[..num_to_keep].iter().enumerate() {
+        for (model_idx, &avg_value) in bands.iter().enumerate() {
             let x_translate = bar_width * (model_idx as f32) - DISPLAY_WIDTH / 2.0;
             if avg_value > max_val {
                 max_val = avg_value;
@@ -342,7 +341,7 @@ impl<B: Backend> RendererState<B> {
                 }],
                 command::SubpassContents::Inline,
             );
-            cmd_buffer.draw_indexed(0..36, 0, 0..(num_to_keep as u32));
+            cmd_buffer.draw_indexed(0..36, 0, 0..(bands.len() as u32));
             cmd_buffer.end_render_pass();
             cmd_buffer.finish();
 

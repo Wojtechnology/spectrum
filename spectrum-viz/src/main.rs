@@ -31,7 +31,7 @@ fn get_arg(args: &mut env::Args, err_msg: &'static str) -> Result<String, &'stat
 fn open_file(path: &str) -> Result<File, String> {
     match File::open(&path) {
         Ok(reader) => Ok(reader),
-        Err(e) => Err(format!("{}", e)),
+        Err(e) => Err(format!("could not open {}: {}", path, e)),
     }
 }
 
@@ -89,7 +89,7 @@ fn main() {
     let shared_data_clone = shared_data.clone();
 
     thread::spawn(move || {
-        run_audio_loop(decoder, shared_data_clone);
+        run_audio_loop(decoder, shared_data_clone, config);
     });
     event_loop::run(shared_data);
 }
