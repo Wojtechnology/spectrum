@@ -178,6 +178,29 @@ fn build_spectrogram_transformer(
     }
 }
 
+pub fn generate_data<D: RawStream<i16> + 'static>(mut decoder: D, config: Config) -> Vec<Vec<f32>> {
+    let channels = decoder.channels();
+    let mut transformer = build_spectrogram_transformer(config, channels);
+    let mut output = vec![];
+    loop {
+        let mut sample = Vec::with_capacity(channels);
+        for _ in 0..channels {
+            match decoder.next() {
+                Some(input) => sample.push(input),
+                None => (),
+            }
+        }
+        if sample.len() < channels {
+            break;
+        }
+        match transformer.transform(sample) {
+            Some(bands) => output.push(bands),
+            None => (),
+        };
+    }
+    output
+}
+
 pub fn run_audio_loop<D: RawStream<i16> + 'static>(
     decoder: D,
     shared_data: Arc<RwLock<SharedData>>,
