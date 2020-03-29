@@ -267,12 +267,10 @@ impl<B: Backend> RendererState<B> {
         let num_to_keep: usize = 512;
         let bar_width = DISPLAY_WIDTH / (num_to_keep as f32);
         let mut max_val = 0.0;
-        let mut idx = 0;
         for (model_idx, &avg_value) in bands[..num_to_keep].iter().enumerate() {
             let x_translate = bar_width * (model_idx as f32) - DISPLAY_WIDTH / 2.0;
             if avg_value > max_val {
                 max_val = avg_value;
-                idx = model_idx;
             }
 
             let model = {

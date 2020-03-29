@@ -329,6 +329,33 @@ impl Transformer for F32AverageTransformer {
 
 // END: F32AverageTransformer
 
+// BEGIN: VectorTakeTransformer
+
+pub struct VectorTakeTransformer<T: Copy> {
+    num_take: usize,
+    phantom: PhantomData<T>,
+}
+
+impl<T: Copy> VectorTakeTransformer<T> {
+    pub fn new(num_take: usize) -> Self {
+        Self {
+            num_take,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: Copy> Transformer for VectorTakeTransformer<T> {
+    type Input = Vec<T>;
+    type Output = Vec<T>;
+
+    fn transform(&mut self, input: Vec<T>) -> Vec<T> {
+        input[..self.num_take].to_vec()
+    }
+}
+
+// END: VectorTakeTransformer
+
 // BEGIN: ZipTransformer
 
 pub struct ZipTransformer<T: Copy> {

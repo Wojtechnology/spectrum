@@ -16,6 +16,7 @@ mod cyclical_buffer;
 mod transforms;
 
 // Public exports
+pub mod config;
 pub mod mp3;
 pub mod raw_stream;
 pub mod shared_data;
