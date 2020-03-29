@@ -6,10 +6,10 @@ use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
 
 use crate::transforms::{
-    F32AverageTransformer, F32DivideTransformer, F32SineFilterTransformer,
-    F32WindowAverageTransformer, FFTtransformer, I16ToF32Transformer, OptionalPipelineTransformer,
-    StutterAggregatorTranformer, Transformer, VectorCacheTransformer, VectorSubTransformer,
-    VectorTransformer, ZipTransformer,
+    F32AverageTransformer, F32DivideTransformer, F32HannWindowTransformer,
+    F32NormalizeByLogTransformer, F32WindowAverageTransformer, FFTtransformer, I16ToF32Transformer,
+    OptionalPipelineTransformer, StutterAggregatorTranformer, Transformer, VectorCacheTransformer,
+    VectorSubTransformer, VectorTransformer, ZipTransformer,
 };
 
 mod concurrent_tee;
@@ -107,25 +107,25 @@ fn build_spectrogram_transformer(
         let itf_vec_tranformer = VectorTransformer::new(Box::new(i16_to_f32_transformer));
         let norm_transformer = F32DivideTransformer::new(i16::max_value() as f32);
         let norm_vec_transformer = VectorTransformer::new(Box::new(norm_transformer));
-        let sine_transformer = F32SineFilterTransformer::new(spectrogram_config.sine_filter_y_int);
+        let hann_transformer = F32HannWindowTransformer::new();
         let fft_transformer = FFTtransformer::<f32>::new(spectrogram_config.buffer_size);
 
         let pipelined_transformer = {
-            let opt_pl_transformer_one = OptionalPipelineTransformer::new(
+            let opt_pl_transformer_1 = OptionalPipelineTransformer::new(
                 Box::new(stutter_transformer),
                 Box::new(itf_vec_tranformer),
             );
-            let opt_pl_transformer_two = OptionalPipelineTransformer::new(
-                Box::new(opt_pl_transformer_one),
+            let opt_pl_transformer_2 = OptionalPipelineTransformer::new(
+                Box::new(opt_pl_transformer_1),
                 Box::new(norm_vec_transformer),
             );
-            let opt_pl_transformer_three = OptionalPipelineTransformer::new(
-                Box::new(opt_pl_transformer_two),
-                Box::new(sine_transformer),
+            let opt_pl_transformer_3 = OptionalPipelineTransformer::new(
+                Box::new(opt_pl_transformer_2),
+                Box::new(hann_transformer),
             );
 
             OptionalPipelineTransformer::new(
-                Box::new(opt_pl_transformer_three),
+                Box::new(opt_pl_transformer_3),
                 Box::new(fft_transformer),
             )
         };
@@ -149,22 +149,25 @@ fn build_spectrogram_transformer(
     );
     let zip_transformer = ZipTransformer::new();
     let avg_transformer = VectorTransformer::new(Box::new(F32AverageTransformer::new()));
+    let norm_transformer = F32NormalizeByLogTransformer::new();
 
-    let opt_pl_transformer_one =
+    let opt_pl_transformer_1 =
         OptionalPipelineTransformer::new(Box::new(cache_transformer), Box::new(zip_transformer));
-    let opt_pl_transformer_two = OptionalPipelineTransformer::new(
-        Box::new(opt_pl_transformer_one),
-        Box::new(avg_transformer),
+    let opt_pl_transformer_2 =
+        OptionalPipelineTransformer::new(Box::new(opt_pl_transformer_1), Box::new(avg_transformer));
+    let opt_pl_transformer_3 = OptionalPipelineTransformer::new(
+        Box::new(opt_pl_transformer_2),
+        Box::new(norm_transformer),
     );
     match spectrogram_config.band_subset {
         Some(subset) => {
             let sub_transformer = VectorSubTransformer::new(subset.start, subset.end);
             Box::new(OptionalPipelineTransformer::new(
-                Box::new(opt_pl_transformer_two),
+                Box::new(opt_pl_transformer_3),
                 Box::new(sub_transformer),
             ))
         }
-        None => Box::new(opt_pl_transformer_two),
+        None => Box::new(opt_pl_transformer_3),
     }
 }
 

@@ -130,24 +130,133 @@ impl<T: Copy> Transformer for StutterAggregatorTranformer<T> {
 
 // END: StutterAggregatorTranformer
 
-// BEGIN: SineFilterTransformer
+// BEGIN: F32ExponentialSmoothingTransformer
 
-pub struct F32SineFilterTransformer {
-    y_int: f32,
+pub enum SmoothingKernel {
+    Average,
+    Difference,
 }
 
-impl F32SineFilterTransformer {
-    pub fn new(y_int: f32) -> Self {
+pub struct F32ExponentialSmoothingTransformer {
+    damping_factor: f32,
+    lead_in: usize,
+    kernel: SmoothingKernel,
+}
+
+impl F32ExponentialSmoothingTransformer {
+    pub fn new(damping_factor: f32, lead_in: usize, kernel: SmoothingKernel) -> Self {
         assert!(
-            y_int >= 0.0,
-            "y_intercept must be greater than or equal to 0"
+            damping_factor >= 0.0,
+            "damping_factor must be greater than or equal to 0"
         );
-        assert!(y_int <= 1.0, "y_intercept must be less than or equal to 1");
-        Self { y_int }
+        assert!(
+            damping_factor <= 1.0,
+            "damping_factor must be less than or equal to 1"
+        );
+        Self {
+            damping_factor,
+            lead_in,
+            kernel,
+        }
     }
 }
 
-impl Transformer for F32SineFilterTransformer {
+impl Transformer for F32ExponentialSmoothingTransformer {
+    type Input = Vec<f32>;
+    type Output = Vec<f32>;
+
+    fn transform(&mut self, input: Vec<f32>) -> Vec<f32> {
+        let input_len = input.len();
+        assert!(
+            input_len > 2 * self.lead_in,
+            "input length must be more than twice lead_in"
+        );
+        let output_len = input_len - 2 * self.lead_in;
+
+        let mut f_avg = vec![0.0; output_len];
+        let mut b_avg = vec![0.0; output_len];
+        let mut cur_f = input[0];
+        let mut cur_b = input[input_len - 1];
+        for i in 1..(input_len - self.lead_in) {
+            cur_f = input[i] * self.damping_factor + (1.0 - self.damping_factor) * cur_f;
+            cur_b = input[input_len - 1 - i] * self.damping_factor
+                + (1.0 - self.damping_factor) * cur_b;
+            if i >= self.lead_in {
+                f_avg[i - self.lead_in] = cur_f;
+                b_avg[output_len - 1 - (i - self.lead_in)] = cur_b;
+            }
+        }
+        let mut output = Vec::with_capacity(output_len);
+        for i in 0..output_len {
+            output.push(match self.kernel {
+                SmoothingKernel::Average => (f_avg[i] + b_avg[i]) / 2.0,
+                SmoothingKernel::Difference => (b_avg[i] - f_avg[i]) / 2.0,
+            });
+        }
+        output
+    }
+}
+
+// END: F32ExponentialSmoothingTransformer
+
+// BEGIN: F32NormalizeByAverageTransformer
+
+pub struct F32NormalizeByAverageTransformer {}
+
+impl F32NormalizeByAverageTransformer {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Transformer for F32NormalizeByAverageTransformer {
+    type Input = Vec<f32>;
+    type Output = Vec<f32>;
+
+    fn transform(&mut self, input: Vec<f32>) -> Vec<f32> {
+        let input_len = input.len();
+        assert!(input_len > 0, "input length must be greater than 0");
+        let average = input.iter().fold(0.0, |acc, &x| acc + x) / input_len as f32;
+        input.iter().map(|&v| v - average).collect()
+    }
+}
+
+// END: F32NormalizeByAverageTransformer
+
+const F32_LOG_C: f32 = 1e-7;
+
+// BEGIN: F32NormalizeByLogTransformer
+
+pub struct F32NormalizeByLogTransformer {}
+
+impl F32NormalizeByLogTransformer {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Transformer for F32NormalizeByLogTransformer {
+    type Input = Vec<f32>;
+    type Output = Vec<f32>;
+
+    fn transform(&mut self, input: Vec<f32>) -> Vec<f32> {
+        input.iter().map(|&v| (v + F32_LOG_C).ln()).collect()
+    }
+}
+
+// END: F32NormalizeByLogTransformer
+
+// BEGIN: F32HannWindowTransformer
+
+pub struct F32HannWindowTransformer {}
+
+impl F32HannWindowTransformer {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Transformer for F32HannWindowTransformer {
     type Input = Vec<f32>;
     type Output = Vec<f32>;
 
@@ -155,16 +264,15 @@ impl Transformer for F32SineFilterTransformer {
         let input_len = input.len();
         assert!(input_len > 0, "input length must be greater than 0");
         let hor_scale = std::f32::consts::PI / (input_len as f32);
-        let y_int = self.y_int;
         input
             .iter()
             .enumerate()
-            .map(|(i, &v)| ((1.0 - y_int) * (i as f32 * hor_scale) + y_int) * v)
+            .map(|(i, &v)| (i as f32 * hor_scale).sin().powi(2) * v)
             .collect()
     }
 }
 
-// END: SineFilterTransformer
+// END: F32HannWindowTransformer
 
 // BEGIN: I16ToF32Transformer
 

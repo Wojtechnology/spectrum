@@ -34,7 +34,7 @@ use spectrum_audio::shared_data::SharedData;
 
 pub const MAX_CUBES: usize = 8192;
 pub const DISPLAY_WIDTH: f32 = 5.5;
-pub const VERT_SCALE: f32 = 1.0;
+pub const VERT_SCALE: f32 = 0.25;
 
 // TODO: Move into own module
 #[derive(Copy, Clone)]
