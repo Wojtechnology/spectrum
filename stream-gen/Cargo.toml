@@ -1,8 +1,0 @@
-[package]
-name = "stream-gen"
-version = "0.1.0"
-authors = ["Wojtek Swiderski <wswiders@uwaterloo.ca>"]
-edition = "2018"
-
-[dependencies]
-spectrum-audio = { path = "../spectrum-audio" }

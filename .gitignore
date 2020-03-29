@@ -14,3 +14,4 @@ Cargo.lock
 
 # Adhoc testing data
 /data/
+/jupyter/
