@@ -34,7 +34,7 @@ use spectrum_audio::shared_data::SharedData;
 
 pub const MAX_CUBES: usize = 8192;
 pub const DISPLAY_WIDTH: f32 = 5.5;
-pub const VERT_SCALE: f32 = 8192.0;
+pub const VERT_SCALE: f32 = 131072.0;
 
 // TODO: Move into own module
 #[derive(Copy, Clone)]
@@ -264,9 +264,16 @@ impl<B: Backend> RendererState<B> {
 
         // SCALE
         let mut models = Vec::new();
-        let bar_width = DISPLAY_WIDTH / (bands.len() as f32);
-        for (model_idx, &avg_value) in bands.iter().enumerate() {
+        let num_to_keep: usize = 512;
+        let bar_width = DISPLAY_WIDTH / (num_to_keep as f32);
+        let mut max_val = 0.0;
+        let mut idx = 0;
+        for (model_idx, &avg_value) in bands[..num_to_keep].iter().enumerate() {
             let x_translate = bar_width * (model_idx as f32) - DISPLAY_WIDTH / 2.0;
+            if avg_value > max_val {
+                max_val = avg_value;
+                idx = model_idx;
+            }
 
             let model = {
                 let mut model = glm::TMat4::<f32>::identity();
@@ -337,7 +344,7 @@ impl<B: Backend> RendererState<B> {
                 }],
                 command::SubpassContents::Inline,
             );
-            cmd_buffer.draw_indexed(0..36, 0, 0..(bands.len() as u32));
+            cmd_buffer.draw_indexed(0..36, 0, 0..(num_to_keep as u32));
             cmd_buffer.end_render_pass();
             cmd_buffer.finish();
 

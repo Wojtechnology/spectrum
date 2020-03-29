@@ -27,7 +27,7 @@ use shared_data::SharedData;
 // TODO: Make these configuration
 pub const BUFFER_SIZE: usize = 1024;
 const STUTTER_SIZE: usize = BUFFER_SIZE / 2;
-const WINDOW_SIZE: usize = 8;
+const WINDOW_SIZE: usize = 1;
 
 fn find_format_with_sample_rate<D: RawStream<i16>>(
     decoder: &D,
