@@ -9,6 +9,8 @@ pub struct SubsetConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SpectrogramConfig {
+    // y-intercept of the sine filter applied to the signal before it is passed into the FFT.
+    pub sine_filter_y_int: f32,
     // Size of circular buffer for audio data points and as a result, number of data points that
     // are input into the FFT transform. The output of the transform will be of the same size but
     // the number of usable output datapoints are only the values for positive coefficients, which
@@ -21,7 +23,8 @@ pub struct SpectrogramConfig {
     // which is currently preferred.
     pub window_size: usize,
     // What subset of bands to include in the output. Usually you want this to be buffer_size / 2
-    // so that you pick up only the positive coefficients.
+    // so that you pick up only the positive coefficients. Note that this is applied AFTER
+    // windowing.
     pub band_subset: Option<SubsetConfig>,
 }
 
@@ -35,6 +38,15 @@ fn assertion(cond: bool, err_msg: &str) -> Result<(), String> {
 
 impl SpectrogramConfig {
     fn validate(&self) -> Result<(), String> {
+        assertion(
+            self.sine_filter_y_int >= 0.0,
+            "sine_filter_y_int must be greater or equal to 0",
+        )?;
+        assertion(
+            self.sine_filter_y_int <= 1.0,
+            "sine_filter_y_int must be less or equal to 1",
+        )?;
+        assertion(self.buffer_size > 0, "buffer_size must be greater than 0")?;
         assertion(self.buffer_size > 0, "buffer_size must be greater than 0")?;
         assertion(self.stutter_size > 0, "stutter_size must be greater than 0")?;
         assertion(self.window_size > 0, "window_size must be greater than 0")?;
@@ -53,7 +65,7 @@ impl SpectrogramConfig {
                     "band_subset.start must be at most band_subset.end",
                 )?;
                 assertion(
-                    subset.end <= self.buffer_size,
+                    subset.end <= self.buffer_size / self.window_size,
                     "band_subset.end must be at most buffer_size",
                 )?;
                 Result::<(), String>::Ok(())

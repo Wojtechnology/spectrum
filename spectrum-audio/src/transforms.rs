@@ -130,6 +130,42 @@ impl<T: Copy> Transformer for StutterAggregatorTranformer<T> {
 
 // END: StutterAggregatorTranformer
 
+// BEGIN: SineFilterTransformer
+
+pub struct F32SineFilterTransformer {
+    y_int: f32,
+}
+
+impl F32SineFilterTransformer {
+    pub fn new(y_int: f32) -> Self {
+        assert!(
+            y_int >= 0.0,
+            "y_intercept must be greater than or equal to 0"
+        );
+        assert!(y_int <= 1.0, "y_intercept must be less than or equal to 1");
+        Self { y_int }
+    }
+}
+
+impl Transformer for F32SineFilterTransformer {
+    type Input = Vec<f32>;
+    type Output = Vec<f32>;
+
+    fn transform(&mut self, input: Vec<f32>) -> Vec<f32> {
+        let input_len = input.len();
+        assert!(input_len > 0, "input length must be greater than 0");
+        let hor_scale = std::f32::consts::PI / (input_len as f32);
+        let y_int = self.y_int;
+        input
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| ((1.0 - y_int) * (i as f32 * hor_scale) + y_int) * v)
+            .collect()
+    }
+}
+
+// END: SineFilterTransformer
+
 // BEGIN: I16ToF32Transformer
 
 pub struct I16ToF32Transformer {}
@@ -150,6 +186,30 @@ impl Transformer for I16ToF32Transformer {
 }
 
 // END: I16ToF32Transformer
+
+// BEGIN: F32DivideTransformer
+
+pub struct F32DivideTransformer {
+    by: f32,
+}
+
+impl F32DivideTransformer {
+    pub fn new(by: f32) -> Self {
+        assert!(by != 0.0, "cannot divide by 0");
+        Self { by }
+    }
+}
+
+impl Transformer for F32DivideTransformer {
+    type Input = f32;
+    type Output = f32;
+
+    fn transform(&mut self, input: f32) -> f32 {
+        input / self.by
+    }
+}
+
+// END: F32DivideTransformer
 
 // BEGIN: VectorTransformer
 
