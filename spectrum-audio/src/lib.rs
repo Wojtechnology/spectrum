@@ -81,8 +81,10 @@ fn push_sample<I: Iterator<Item = i16>>(
         }
     }
 
+    let start = SystemTime::now();
     match transformer.transform(sample) {
         Some(output) => {
+            println!("Transform({})", start.elapsed().unwrap().as_micros());
             let mut data = shared_data.write().unwrap();
             data.set_bands(output);
         }
@@ -227,14 +229,7 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
 
     thread::spawn(move || {
         let mut cur_idx: u64 = 0;
-        let mut last_time = SystemTime::now();
-        let mut last_push_time = SystemTime::now();
-
         let mut transformer = build_spectrogram_transformer(config.spectrogram, channels);
-
-        let mut procs = Vec::<u128>::new();
-        let mut id = 0;
-        let mut sample_id = 0;
         loop {
             let (lower_bound, upper_bound) = {
                 let bounds = idx_bounds_one.read().unwrap();
@@ -250,10 +245,6 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
                 ) {
                     return;
                 }
-                let tm = last_push_time.elapsed().unwrap().as_nanos();
-                procs.push(tm);
-                sample_id += 1;
-                last_push_time = SystemTime::now();
             }
             if cur_idx < upper_bound {
                 if !push_sample(
@@ -265,39 +256,6 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
                 ) {
                     return;
                 }
-                let tm = last_push_time.elapsed().unwrap().as_nanos();
-                procs.push(tm);
-                sample_id += 1;
-                last_push_time = SystemTime::now();
-            }
-
-            // Wait to immitate progression of time
-            let proc_duration = last_time.elapsed().unwrap();
-            let wait_duration = Duration::from_nanos(wait_nanos);
-            if wait_duration > proc_duration {
-                thread::sleep(wait_duration - proc_duration);
-            }
-            last_time = SystemTime::now();
-
-            if procs.len() >= 44100 {
-                let mut proc_avg = 0;
-                let mut proc_max = 0;
-                for &proc in procs.iter() {
-                    proc_avg += proc;
-                    if proc > proc_max {
-                        proc_max = proc;
-                    }
-                }
-                println!(
-                    "Id({}), Wait({}), AvgProc({}), MaxProc({}), SampleId({})",
-                    id,
-                    wait_nanos,
-                    proc_avg / 44100,
-                    proc_max,
-                    sample_id,
-                );
-                procs = vec![];
-                id += 1;
             }
         }
     });

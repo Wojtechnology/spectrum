@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 pub struct CyclicalBuffer<T: Copy> {
     buf: Vec<T>,
     size: usize,
@@ -33,10 +35,6 @@ impl<T: Copy> CyclicalBuffer<T> {
             self.len() == self.size,
             "Can only get values when buffer is full"
         );
-        let mut out = Vec::with_capacity(self.size);
-        for i in 0..self.size {
-            out.push(self.buf[(self.cursor + i) % self.size]);
-        }
-        out
+        [&self.buf[self.cursor..], &self.buf[..self.cursor]].concat()
     }
 }

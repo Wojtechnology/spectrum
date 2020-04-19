@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use num_complex::Complex;
 use num_traits::Zero;
@@ -67,19 +68,22 @@ impl<T: FFTval> Transformer for FFTtransformer<T> {
     type Output = Vec<T>;
 
     fn transform(&mut self, input: Vec<T>) -> Vec<T> {
+        let start = SystemTime::now();
         let mut m_input: Vec<_> = input.iter().map(|&v| T::real_to_complex(v)).collect();
         let mut m_output = vec![Complex::zero(); self.fft.len()];
         self.fft.process(&mut m_input, &mut m_output);
 
         // normalize
         let len_sqrt = T::cast_and_sqrt(self.fft.len());
-        m_output
+        let out = m_output
             .into_iter()
             .map(|elem| {
                 let c = elem / len_sqrt;
                 T::sqrt(c.re * c.re + c.im * c.im)
             })
-            .collect()
+            .collect();
+        println!("FFTTime({})", start.elapsed().unwrap().as_micros());
+        out
     }
 }
 
@@ -261,14 +265,17 @@ impl Transformer for F32HannWindowTransformer {
     type Output = Vec<f32>;
 
     fn transform(&mut self, input: Vec<f32>) -> Vec<f32> {
+        let start = SystemTime::now();
         let input_len = input.len();
         assert!(input_len > 0, "input length must be greater than 0");
         let hor_scale = std::f32::consts::PI / (input_len as f32);
-        input
+        let out = input
             .iter()
             .enumerate()
             .map(|(i, &v)| (i as f32 * hor_scale).sin().powi(2) * v)
-            .collect()
+            .collect();
+        println!("Hann({})", start.elapsed().unwrap().as_micros());
+        out
     }
 }
 
@@ -336,10 +343,13 @@ impl<I: Clone, O: Copy> Transformer for VectorTransformer<I, O> {
     type Output = Vec<O>;
 
     fn transform(&mut self, input: Vec<I>) -> Vec<O> {
-        input
+        let start = SystemTime::now();
+        let out = input
             .iter()
             .map(|v| self.transformer.transform(v.clone()))
-            .collect()
+            .collect();
+        println!("VectorTime({})", start.elapsed().unwrap().as_micros());
+        out
     }
 }
 
