@@ -23,7 +23,7 @@ pub mod raw_stream;
 pub mod shared_data;
 
 use concurrent_tee::ConcurrentTee;
-use config::Config;
+use config::{Config, SpectrogramConfig};
 use raw_stream::RawStream;
 use shared_data::SharedData;
 
@@ -91,24 +91,21 @@ fn push_sample<I: Iterator<Item = i16>>(
     return true;
 }
 
-fn build_spectrogram_transformer(
-    config: Config,
+pub fn build_spectrogram_transformer(
+    config: SpectrogramConfig,
     channel_size: usize,
 ) -> Box<dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>> {
-    let spectrogram_config = config.spectrogram;
     let mut band_transformers: Vec<Box<dyn Transformer<Input = i16, Output = Option<Vec<f32>>>>> =
         Vec::with_capacity(channel_size);
     for _ in 0..channel_size {
-        let stutter_transformer = StutterAggregatorTranformer::<i16>::new(
-            spectrogram_config.buffer_size,
-            spectrogram_config.stutter_size,
-        );
+        let stutter_transformer =
+            StutterAggregatorTranformer::<i16>::new(config.buffer_size, config.stutter_size);
         let i16_to_f32_transformer = I16ToF32Transformer::new();
         let itf_vec_tranformer = VectorTransformer::new(Box::new(i16_to_f32_transformer));
         let norm_transformer = F32DivideTransformer::new(i16::max_value() as f32);
         let norm_vec_transformer = VectorTransformer::new(Box::new(norm_transformer));
         let hann_transformer = F32HannWindowTransformer::new();
-        let fft_transformer = FFTtransformer::<f32>::new(spectrogram_config.buffer_size);
+        let fft_transformer = FFTtransformer::<f32>::new(config.buffer_size);
 
         let pipelined_transformer = {
             let opt_pl_transformer_1 = OptionalPipelineTransformer::new(
@@ -130,9 +127,8 @@ fn build_spectrogram_transformer(
             )
         };
 
-        let band_transformer = if spectrogram_config.window_size > 1 {
-            let f32_window_transformer =
-                F32WindowAverageTransformer::new(spectrogram_config.window_size);
+        let band_transformer = if config.window_size > 1 {
+            let f32_window_transformer = F32WindowAverageTransformer::new(config.window_size);
             OptionalPipelineTransformer::new(
                 Box::new(pipelined_transformer),
                 Box::new(f32_window_transformer),
@@ -145,7 +141,7 @@ fn build_spectrogram_transformer(
     }
     let cache_transformer = VectorCacheTransformer::new(
         band_transformers,
-        vec![0.0; spectrogram_config.buffer_size / spectrogram_config.window_size],
+        vec![0.0; config.buffer_size / config.window_size],
     );
     let zip_transformer = ZipTransformer::new();
     let avg_transformer = VectorTransformer::new(Box::new(F32AverageTransformer::new()));
@@ -156,7 +152,7 @@ fn build_spectrogram_transformer(
         OptionalPipelineTransformer::new(Box::new(opt_pl_transformer_1), Box::new(avg_transformer));
     let opt_pl_transformer_3_boxed: Box<
         dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>,
-    > = if spectrogram_config.log_scaling {
+    > = if config.log_scaling {
         let norm_transformer = F32NormalizeByLogTransformer::new();
         Box::new(OptionalPipelineTransformer::new(
             Box::new(opt_pl_transformer_2),
@@ -166,7 +162,7 @@ fn build_spectrogram_transformer(
         Box::new(opt_pl_transformer_2)
     };
 
-    match spectrogram_config.band_subset {
+    match config.band_subset {
         Some(subset) => {
             let sub_transformer = VectorSubTransformer::new(subset.start, subset.end);
             Box::new(OptionalPipelineTransformer::new(
@@ -180,7 +176,7 @@ fn build_spectrogram_transformer(
 
 pub fn generate_data<D: RawStream<i16> + 'static>(mut decoder: D, config: Config) -> Vec<Vec<f32>> {
     let channels = decoder.channels();
-    let mut transformer = build_spectrogram_transformer(config, channels);
+    let mut transformer = build_spectrogram_transformer(config.spectrogram, channels);
     let mut output = vec![];
     loop {
         let mut sample = Vec::with_capacity(channels);
@@ -221,7 +217,8 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
     // Audio meta and wait computation
     let sample_rate = decoder.sample_rate();
     let channels = decoder.channels();
-    let wait_nanos = ((1.0 as f64) / (sample_rate as f64 * channels as f64) * (1e9 as f64)) as u64;
+    let wait_nanos = ((1.0 as f64) / (sample_rate as f64) * (1e9 as f64)) as u64;
+    println!("Wait nanos: {}, {}", wait_nanos, sample_rate);
 
     // Init concurrent state
     let idx_bounds_one = Arc::new(RwLock::new(IdxBounds::new()));
@@ -231,9 +228,13 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
     thread::spawn(move || {
         let mut cur_idx: u64 = 0;
         let mut last_time = SystemTime::now();
+        let mut last_push_time = SystemTime::now();
 
-        let mut transformer = build_spectrogram_transformer(config, channels);
+        let mut transformer = build_spectrogram_transformer(config.spectrogram, channels);
 
+        let mut procs = Vec::<u128>::new();
+        let mut id = 0;
+        let mut sample_id = 0;
         loop {
             let (lower_bound, upper_bound) = {
                 let bounds = idx_bounds_one.read().unwrap();
@@ -249,6 +250,10 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
                 ) {
                     return;
                 }
+                let tm = last_push_time.elapsed().unwrap().as_nanos();
+                procs.push(tm);
+                sample_id += 1;
+                last_push_time = SystemTime::now();
             }
             if cur_idx < upper_bound {
                 if !push_sample(
@@ -260,6 +265,10 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
                 ) {
                     return;
                 }
+                let tm = last_push_time.elapsed().unwrap().as_nanos();
+                procs.push(tm);
+                sample_id += 1;
+                last_push_time = SystemTime::now();
             }
 
             // Wait to immitate progression of time
@@ -269,6 +278,27 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
                 thread::sleep(wait_duration - proc_duration);
             }
             last_time = SystemTime::now();
+
+            if procs.len() >= 44100 {
+                let mut proc_avg = 0;
+                let mut proc_max = 0;
+                for &proc in procs.iter() {
+                    proc_avg += proc;
+                    if proc > proc_max {
+                        proc_max = proc;
+                    }
+                }
+                println!(
+                    "Id({}), Wait({}), AvgProc({}), MaxProc({}), SampleId({})",
+                    id,
+                    wait_nanos,
+                    proc_avg / 44100,
+                    proc_max,
+                    sample_id,
+                );
+                procs = vec![];
+                id += 1;
+            }
         }
     });
 
