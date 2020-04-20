@@ -1,5 +1,3 @@
-use std::time::SystemTime;
-
 pub struct CyclicalBuffer<T: Copy> {
     buf: Vec<T>,
     size: usize,

@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
@@ -8,8 +8,9 @@ use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
 use crate::transforms::{
     F32AverageTransformer, F32DivideTransformer, F32HannWindowTransformer,
     F32NormalizeByLogTransformer, F32WindowAverageTransformer, FFTtransformer, I16ToF32Transformer,
-    OptionalPipelineTransformer, StutterAggregatorTranformer, Transformer, VectorCacheTransformer,
-    VectorSubTransformer, VectorTransformer, ZipTransformer,
+    IteratorCollector, IteratorMapper, OptionalPipelineTransformer, StutterAggregatorTranformer,
+    Transformer, TwoChannel, VectorSubTransformer, VectorTransformer, VectorTwoChannelCombiner,
+    ZipTransformer,
 };
 
 mod concurrent_tee;
@@ -68,18 +69,14 @@ impl IdxBounds {
 fn push_sample<I: Iterator<Item = i16>>(
     iter: &mut I,
     cur_idx: &mut u64,
-    channels: usize,
-    transformer: &mut Box<dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>>,
+    transformer: &mut Box<dyn Transformer<Input = TwoChannel<i16>, Output = Option<Vec<f32>>>>,
     shared_data: Arc<RwLock<SharedData>>,
 ) -> bool {
-    let mut sample = Vec::with_capacity(channels);
-    for _ in 0..channels {
-        *cur_idx += 1;
-        match iter.next() {
-            Some(input) => sample.push(input),
-            None => return false,
-        }
-    }
+    let sample = match (iter.next(), iter.next()) {
+        (Some(l), Some(r)) => (l, r),
+        _ => return false,
+    };
+    *cur_idx += 2;
 
     let start = SystemTime::now();
     match transformer.transform(sample) {
@@ -93,104 +90,101 @@ fn push_sample<I: Iterator<Item = i16>>(
     return true;
 }
 
-pub fn build_spectrogram_transformer(
-    config: SpectrogramConfig,
-    channel_size: usize,
-) -> Box<dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>> {
-    let mut band_transformers: Vec<Box<dyn Transformer<Input = i16, Output = Option<Vec<f32>>>>> =
-        Vec::with_capacity(channel_size);
-    for _ in 0..channel_size {
-        let stutter_transformer =
-            StutterAggregatorTranformer::<i16>::new(config.buffer_size, config.stutter_size);
-        let i16_to_f32_transformer = I16ToF32Transformer::new();
-        let itf_vec_tranformer = VectorTransformer::new(Box::new(i16_to_f32_transformer));
-        let norm_transformer = F32DivideTransformer::new(i16::max_value() as f32);
-        let norm_vec_transformer = VectorTransformer::new(Box::new(norm_transformer));
-        let hann_transformer = F32HannWindowTransformer::new();
-        let fft_transformer = FFTtransformer::<f32>::new(config.buffer_size);
+pub fn build_single_channel_transformer(
+    config: &SpectrogramConfig,
+) -> Box<dyn Transformer<Input = i16, Output = Option<Vec<f32>>>> {
+    let stutter_transformer =
+        StutterAggregatorTranformer::<i16>::new(config.buffer_size, config.stutter_size);
+    let i16_to_f32_transformer = I16ToF32Transformer::new();
+    let itf_vec_tranformer = VectorTransformer::new(Box::new(i16_to_f32_transformer));
+    let norm_transformer = F32DivideTransformer::new(i16::max_value() as f32);
+    let norm_vec_transformer = VectorTransformer::new(Box::new(norm_transformer));
+    let hann_transformer = F32HannWindowTransformer::new();
+    let fft_transformer = FFTtransformer::<f32>::new(config.buffer_size);
 
-        let pipelined_transformer = {
-            let opt_pl_transformer_1 = OptionalPipelineTransformer::new(
-                Box::new(stutter_transformer),
-                Box::new(itf_vec_tranformer),
-            );
-            let opt_pl_transformer_2 = OptionalPipelineTransformer::new(
-                Box::new(opt_pl_transformer_1),
-                Box::new(norm_vec_transformer),
-            );
-            let opt_pl_transformer_3 = OptionalPipelineTransformer::new(
-                Box::new(opt_pl_transformer_2),
-                Box::new(hann_transformer),
-            );
-
-            OptionalPipelineTransformer::new(
-                Box::new(opt_pl_transformer_3),
-                Box::new(fft_transformer),
-            )
-        };
-
-        let band_transformer = if config.window_size > 1 {
-            let f32_window_transformer = F32WindowAverageTransformer::new(config.window_size);
-            OptionalPipelineTransformer::new(
-                Box::new(pipelined_transformer),
-                Box::new(f32_window_transformer),
-            )
-        } else {
-            pipelined_transformer
-        };
-
-        band_transformers.push(Box::new(band_transformer))
-    }
-    let cache_transformer = VectorCacheTransformer::new(
-        band_transformers,
-        vec![0.0; config.buffer_size / config.window_size],
-    );
-    let zip_transformer = ZipTransformer::new();
-    let avg_transformer = VectorTransformer::new(Box::new(F32AverageTransformer::new()));
-
-    let opt_pl_transformer_1 =
-        OptionalPipelineTransformer::new(Box::new(cache_transformer), Box::new(zip_transformer));
-    let opt_pl_transformer_2 =
-        OptionalPipelineTransformer::new(Box::new(opt_pl_transformer_1), Box::new(avg_transformer));
-    let opt_pl_transformer_3_boxed: Box<
-        dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>,
-    > = if config.log_scaling {
-        let norm_transformer = F32NormalizeByLogTransformer::new();
-        Box::new(OptionalPipelineTransformer::new(
+    let pipelined_transformer = {
+        let opt_pl_transformer_1 = OptionalPipelineTransformer::new(
+            Box::new(stutter_transformer),
+            Box::new(itf_vec_tranformer),
+        );
+        let opt_pl_transformer_2 = OptionalPipelineTransformer::new(
+            Box::new(opt_pl_transformer_1),
+            Box::new(norm_vec_transformer),
+        );
+        let opt_pl_transformer_3 = OptionalPipelineTransformer::new(
             Box::new(opt_pl_transformer_2),
-            Box::new(norm_transformer),
-        ))
-    } else {
-        Box::new(opt_pl_transformer_2)
+            Box::new(hann_transformer),
+        );
+
+        OptionalPipelineTransformer::new(Box::new(opt_pl_transformer_3), Box::new(fft_transformer))
     };
 
-    match config.band_subset {
-        Some(subset) => {
-            let sub_transformer = VectorSubTransformer::new(subset.start, subset.end);
-            Box::new(OptionalPipelineTransformer::new(
-                opt_pl_transformer_3_boxed,
-                Box::new(sub_transformer),
-            ))
-        }
-        None => opt_pl_transformer_3_boxed,
-    }
+    let band_transformer = if config.window_size > 1 {
+        let f32_window_transformer = F32WindowAverageTransformer::new(config.window_size);
+        OptionalPipelineTransformer::new(
+            Box::new(pipelined_transformer),
+            Box::new(f32_window_transformer),
+        )
+    } else {
+        pipelined_transformer
+    };
+
+    Box::new(band_transformer)
+}
+
+pub fn build_spectrogram_transformer(
+    config: &SpectrogramConfig,
+    channel_size: usize,
+) -> Box<dyn Transformer<Input = TwoChannel<i16>, Output = Option<Vec<f32>>>> {
+    assert!(channel_size == 2, "Only two channels currently supported");
+
+    let two_channel_combiner = VectorTwoChannelCombiner::new(
+        build_single_channel_transformer(config),
+        build_single_channel_transformer(config),
+        vec![0.0; config.buffer_size / config.window_size],
+    );
+
+    Box::new(OptionalPipelineTransformer::new(
+        Box::new(OptionalPipelineTransformer::new(
+            Box::new(two_channel_combiner),
+            Box::new(IteratorMapper::new(|x: TwoChannel<f32>| (x.0 + x.1) / 2.0)),
+        )),
+        Box::new(IteratorCollector::new()),
+    ))
+    // let opt_pl_transformer_3_boxed: Box<
+    //     dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>,
+    // > = if config.log_scaling {
+    //     let norm_transformer = F32NormalizeByLogTransformer::new();
+    //     Box::new(OptionalPipelineTransformer::new(
+    //         Box::new(opt_pl_transformer_2),
+    //         Box::new(norm_transformer),
+    //     ))
+    // } else {
+    //     Box::new(opt_pl_transformer_2)
+    // };
+
+    // match config.band_subset {
+    //     Some(subset) => {
+    //         let sub_transformer = VectorSubTransformer::new(subset.start, subset.end);
+    //         Box::new(OptionalPipelineTransformer::new(
+    //             opt_pl_transformer_3_boxed,
+    //             Box::new(sub_transformer),
+    //         ))
+    //     }
+    //     None => opt_pl_transformer_3_boxed,
+    // }
 }
 
 pub fn generate_data<D: RawStream<i16> + 'static>(mut decoder: D, config: Config) -> Vec<Vec<f32>> {
     let channels = decoder.channels();
-    let mut transformer = build_spectrogram_transformer(config.spectrogram, channels);
+    assert!(channels == 2, "Generating data only supports 2 channels");
+    let mut transformer = build_spectrogram_transformer(&config.spectrogram, channels);
     let mut output = vec![];
     loop {
-        let mut sample = Vec::with_capacity(channels);
-        for _ in 0..channels {
-            match decoder.next() {
-                Some(input) => sample.push(input),
-                None => (),
-            }
-        }
-        if sample.len() < channels {
-            break;
-        }
+        let sample = match (decoder.next(), decoder.next()) {
+            (Some(l), Some(r)) => (l, r),
+            _ => break,
+        };
         match transformer.transform(sample) {
             Some(bands) => output.push(bands),
             None => (),
@@ -219,6 +213,7 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
     // Audio meta and wait computation
     let sample_rate = decoder.sample_rate();
     let channels = decoder.channels();
+    assert!(channels == 2, "Audio loop only supports 2 channels");
     let wait_nanos = ((1.0 as f64) / (sample_rate as f64) * (1e9 as f64)) as u64;
     println!("Wait nanos: {}, {}", wait_nanos, sample_rate);
 
@@ -229,7 +224,7 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
 
     thread::spawn(move || {
         let mut cur_idx: u64 = 0;
-        let mut transformer = build_spectrogram_transformer(config.spectrogram, channels);
+        let mut transformer = build_spectrogram_transformer(&config.spectrogram, channels);
         loop {
             let (lower_bound, upper_bound) = {
                 let bounds = idx_bounds_one.read().unwrap();
@@ -239,7 +234,6 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
                 if !push_sample(
                     &mut decoder_b,
                     &mut cur_idx,
-                    channels,
                     &mut transformer,
                     shared_data.clone(),
                 ) {
@@ -250,7 +244,6 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
                 if !push_sample(
                     &mut decoder_b,
                     &mut cur_idx,
-                    channels,
                     &mut transformer,
                     shared_data.clone(),
                 ) {

@@ -134,102 +134,9 @@ impl<T: Copy> Transformer for StutterAggregatorTranformer<T> {
 
 // END: StutterAggregatorTranformer
 
-// BEGIN: F32ExponentialSmoothingTransformer
-
-pub enum SmoothingKernel {
-    Average,
-    Difference,
-}
-
-pub struct F32ExponentialSmoothingTransformer {
-    damping_factor: f32,
-    lead_in: usize,
-    kernel: SmoothingKernel,
-}
-
-impl F32ExponentialSmoothingTransformer {
-    pub fn new(damping_factor: f32, lead_in: usize, kernel: SmoothingKernel) -> Self {
-        assert!(
-            damping_factor >= 0.0,
-            "damping_factor must be greater than or equal to 0"
-        );
-        assert!(
-            damping_factor <= 1.0,
-            "damping_factor must be less than or equal to 1"
-        );
-        Self {
-            damping_factor,
-            lead_in,
-            kernel,
-        }
-    }
-}
-
-impl Transformer for F32ExponentialSmoothingTransformer {
-    type Input = Vec<f32>;
-    type Output = Vec<f32>;
-
-    fn transform(&mut self, input: Vec<f32>) -> Vec<f32> {
-        let input_len = input.len();
-        assert!(
-            input_len > 2 * self.lead_in,
-            "input length must be more than twice lead_in"
-        );
-        let output_len = input_len - 2 * self.lead_in;
-
-        let mut f_avg = vec![0.0; output_len];
-        let mut b_avg = vec![0.0; output_len];
-        let mut cur_f = input[0];
-        let mut cur_b = input[input_len - 1];
-        for i in 1..(input_len - self.lead_in) {
-            cur_f = input[i] * self.damping_factor + (1.0 - self.damping_factor) * cur_f;
-            cur_b = input[input_len - 1 - i] * self.damping_factor
-                + (1.0 - self.damping_factor) * cur_b;
-            if i >= self.lead_in {
-                f_avg[i - self.lead_in] = cur_f;
-                b_avg[output_len - 1 - (i - self.lead_in)] = cur_b;
-            }
-        }
-        let mut output = Vec::with_capacity(output_len);
-        for i in 0..output_len {
-            output.push(match self.kernel {
-                SmoothingKernel::Average => (f_avg[i] + b_avg[i]) / 2.0,
-                SmoothingKernel::Difference => (b_avg[i] - f_avg[i]) / 2.0,
-            });
-        }
-        output
-    }
-}
-
-// END: F32ExponentialSmoothingTransformer
-
-// BEGIN: F32NormalizeByAverageTransformer
-
-pub struct F32NormalizeByAverageTransformer {}
-
-impl F32NormalizeByAverageTransformer {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Transformer for F32NormalizeByAverageTransformer {
-    type Input = Vec<f32>;
-    type Output = Vec<f32>;
-
-    fn transform(&mut self, input: Vec<f32>) -> Vec<f32> {
-        let input_len = input.len();
-        assert!(input_len > 0, "input length must be greater than 0");
-        let average = input.iter().fold(0.0, |acc, &x| acc + x) / input_len as f32;
-        input.iter().map(|&v| v - average).collect()
-    }
-}
-
-// END: F32NormalizeByAverageTransformer
+// BEGIN: F32NormalizeByLogTransformer
 
 const F32_LOG_C: f32 = 1e-7;
-
-// BEGIN: F32NormalizeByLogTransformer
 
 pub struct F32NormalizeByLogTransformer {}
 
@@ -388,60 +295,126 @@ impl<I, M, O> Transformer for OptionalPipelineTransformer<I, M, O> {
 
 // END: OptionalPipelineTransformer
 
-// BEGIN: VectorCacheTransformer
+// BEGIN: VectorTwoChannelCombiner
 
-pub struct VectorCacheTransformer<I: Copy, O: Clone> {
-    transformers: Vec<Box<dyn Transformer<Input = I, Output = Option<O>>>>,
-    cache: Vec<O>,
+pub type TwoChannel<T> = (T, T);
+
+pub struct VectorTwoChannelCombiner<I, O: Clone> {
+    transformer_one: Box<dyn Transformer<Input = I, Output = Option<Vec<O>>>>,
+    transformer_two: Box<dyn Transformer<Input = I, Output = Option<Vec<O>>>>,
+    cache_one: Vec<O>,
+    cache_two: Vec<O>,
 }
 
-impl<I: Copy, O: Clone> VectorCacheTransformer<I, O> {
+impl<I, O: Clone> VectorTwoChannelCombiner<I, O> {
     pub fn new(
-        transformers: Vec<Box<dyn Transformer<Input = I, Output = Option<O>>>>,
-        default_value: O,
+        transformer_one: Box<dyn Transformer<Input = I, Output = Option<Vec<O>>>>,
+        transformer_two: Box<dyn Transformer<Input = I, Output = Option<Vec<O>>>>,
+        default_vector: Vec<O>,
     ) -> Self {
-        let mut cache = Vec::with_capacity(transformers.len());
-        for _ in 0..transformers.len() {
-            cache.push(default_value.clone());
-        }
         Self {
-            transformers,
-            cache,
+            transformer_one,
+            transformer_two,
+            cache_one: default_vector.clone(),
+            cache_two: default_vector,
         }
     }
 }
 
-impl<I: Copy, O: Clone> Transformer for VectorCacheTransformer<I, O> {
-    type Input = Vec<I>;
-    type Output = Option<Vec<O>>;
+impl<I, O: Clone + 'static> Transformer for VectorTwoChannelCombiner<I, O> {
+    type Input = TwoChannel<I>;
+    type Output = Option<Box<dyn Iterator<Item = TwoChannel<O>>>>;
 
-    fn transform(&mut self, input: Vec<I>) -> Option<Vec<O>> {
-        assert!(
-            input.len() == self.transformers.len(),
-            "Input length must be same as length of tranformers"
-        );
-        let mut has_update = false;
-        let mut idx = 0;
-        for (input_val, transformer) in input.iter().zip(self.transformers.iter_mut()) {
-            match transformer.transform(*input_val) {
-                Some(output_val) => {
-                    has_update = true;
-                    self.cache[idx] = output_val;
-                }
-                None => {}
+    fn transform(
+        &mut self,
+        input: TwoChannel<I>,
+    ) -> Option<Box<dyn Iterator<Item = TwoChannel<O>>>> {
+        let (l_chan, r_chan) = match (
+            self.transformer_one.transform(input.0),
+            self.transformer_two.transform(input.1),
+        ) {
+            (Some(one), Some(two)) => {
+                self.cache_one = one.clone();
+                self.cache_two = two.clone();
+                (one, two)
             }
-            idx += 1;
-        }
+            (Some(one), None) => {
+                self.cache_one = one.clone();
+                (one, self.cache_two.clone())
+            }
+            (None, Some(two)) => {
+                self.cache_two = two.clone();
+                (self.cache_one.clone(), two)
+            }
+            (None, None) => return None,
+        };
+        Some(Box::new(
+            l_chan
+                .into_iter()
+                .zip(r_chan.into_iter())
+                .map(|(l, r)| (l, r)),
+        ))
+    }
+}
 
-        if has_update {
-            Some(self.cache.clone())
-        } else {
-            None
+// END: VectorTwoChannelCombiner
+
+// BEGIN: IteratorMapper
+
+pub struct IteratorMapper<I, O, F>
+where
+    F: Fn(I) -> O + Copy + 'static,
+{
+    f: F,
+    i_phantom: PhantomData<I>,
+    o_phantom: PhantomData<O>,
+}
+
+impl<I, O, F: Fn(I) -> O + Copy + 'static> IteratorMapper<I, O, F> {
+    pub fn new(f: F) -> Self {
+        Self {
+            f,
+            i_phantom: PhantomData,
+            o_phantom: PhantomData,
         }
     }
 }
 
-// END: VectorCacheTransformer
+impl<I: 'static, O, F: Fn(I) -> O + Copy + 'static> Transformer for IteratorMapper<I, O, F> {
+    type Input = Box<dyn Iterator<Item = I>>;
+    type Output = Box<dyn Iterator<Item = O>>;
+
+    fn transform(&mut self, input: Box<dyn Iterator<Item = I>>) -> Box<dyn Iterator<Item = O>> {
+        Box::new(input.map(self.f))
+    }
+}
+
+// END: IteratorMapper
+
+// BEGIN: IteratorCollectTransformer
+
+pub struct IteratorCollector<T> {
+    phantom: PhantomData<T>,
+}
+
+impl<T> IteratorCollector<T> {
+    pub fn new() -> Self {
+        Self {
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<T> Transformer for IteratorCollector<T> {
+    type Input = Box<dyn Iterator<Item = T>>;
+    type Output = Vec<T>;
+
+    fn transform(&mut self, input: Box<dyn Iterator<Item = T>>) -> Vec<T> {
+        input.collect()
+    }
+}
+
+// END: IteratorCollectTransformer
 
 // BEGIN: F32WindowAverageTransformer
 
