@@ -1,6 +1,5 @@
 use std::sync::{Arc, RwLock};
 use std::thread;
-use std::time::SystemTime;
 
 use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
@@ -77,10 +76,8 @@ fn push_sample<I: Iterator<Item = i16>>(
     };
     *cur_idx += 2;
 
-    let start = SystemTime::now();
     match transformer.transform(sample) {
         Some(output) => {
-            println!("Transform({})", start.elapsed().unwrap().as_micros());
             let mut data = shared_data.write().unwrap();
             data.set_bands(output);
         }
@@ -195,11 +192,8 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
         .expect("failed to play_stream");
 
     // Audio meta and wait computation
-    let sample_rate = decoder.sample_rate();
     let channels = decoder.channels();
     assert!(channels == 2, "Audio loop only supports 2 channels");
-    let wait_nanos = ((1.0 as f64) / (sample_rate as f64) * (1e9 as f64)) as u64;
-    println!("Wait nanos: {}, {}", wait_nanos, sample_rate);
 
     // Init concurrent state
     let idx_bounds_one = Arc::new(RwLock::new(IdxBounds::new()));

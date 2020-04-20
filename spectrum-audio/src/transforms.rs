@@ -1,6 +1,5 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use num_complex::Complex;
 use num_traits::Zero;
@@ -68,19 +67,16 @@ impl<T: FFTval> Transformer for FFTtransformer<T> {
     type Output = Box<dyn Iterator<Item = T>>;
 
     fn transform(&mut self, input: Box<dyn Iterator<Item = T>>) -> Box<dyn Iterator<Item = T>> {
-        let start = SystemTime::now();
         let mut m_input: Vec<_> = input.map(|v| T::real_to_complex(v)).collect();
         let mut m_output = vec![Complex::zero(); self.fft.len()];
         self.fft.process(&mut m_input, &mut m_output);
 
         // normalize
         let len_sqrt = T::cast_and_sqrt(self.fft.len());
-        let out = m_output.into_iter().map(move |elem| {
+        Box::new(m_output.into_iter().map(move |elem| {
             let c = elem / len_sqrt;
             T::sqrt(c.re * c.re + c.im * c.im)
-        });
-        println!("FFTTime({})", start.elapsed().unwrap().as_micros());
-        Box::new(out)
+        }))
     }
 }
 
@@ -297,10 +293,7 @@ impl<T> Transformer for IteratorCollector<T> {
     type Output = Vec<T>;
 
     fn transform(&mut self, input: Box<dyn Iterator<Item = T>>) -> Vec<T> {
-        let start = SystemTime::now();
-        let out = input.collect();
-        println!("CollectTime({})", start.elapsed().unwrap().as_micros());
-        out
+        input.collect()
     }
 }
 
