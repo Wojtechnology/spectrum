@@ -5,16 +5,9 @@ use std::time::SystemTime;
 use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
 
-use crate::transforms::{
-    F32AverageTransformer, F32DivideTransformer, F32HannWindowTransformer,
-    F32NormalizeByLogTransformer, F32WindowAverageTransformer, FFTtransformer, I16ToF32Transformer,
-    IteratorCollector, IteratorMapper, OptionalPipelineTransformer, StutterAggregatorTranformer,
-    Transformer, TwoChannel, VectorSubTransformer, VectorTransformer, VectorTwoChannelCombiner,
-    ZipTransformer,
-};
-
 mod concurrent_tee;
 mod cyclical_buffer;
+mod mappers;
 mod transforms;
 
 // Public exports
@@ -25,8 +18,14 @@ pub mod shared_data;
 
 use concurrent_tee::ConcurrentTee;
 use config::{Config, SpectrogramConfig};
+use mappers::{f32_hann_window, f32_log_normalize};
 use raw_stream::RawStream;
 use shared_data::SharedData;
+use transforms::{
+    FFTtransformer, IteratorCollector, IteratorEnumMapper, IteratorMapper, IteratorSubSequencer,
+    OptionalPipelineTransformer, StutterAggregatorTranformer, Transformer, TwoChannel,
+    VectorTwoChannelCombiner,
+};
 
 fn find_format_with_sample_rate<D: RawStream<i16>>(
     decoder: &D,
@@ -92,44 +91,29 @@ fn push_sample<I: Iterator<Item = i16>>(
 
 pub fn build_single_channel_transformer(
     config: &SpectrogramConfig,
-) -> Box<dyn Transformer<Input = i16, Output = Option<Vec<f32>>>> {
+) -> Box<dyn Transformer<Input = i16, Output = Option<Box<dyn Iterator<Item = f32>>>>> {
     let stutter_transformer =
         StutterAggregatorTranformer::<i16>::new(config.buffer_size, config.stutter_size);
-    let i16_to_f32_transformer = I16ToF32Transformer::new();
-    let itf_vec_tranformer = VectorTransformer::new(Box::new(i16_to_f32_transformer));
-    let norm_transformer = F32DivideTransformer::new(i16::max_value() as f32);
-    let norm_vec_transformer = VectorTransformer::new(Box::new(norm_transformer));
-    let hann_transformer = F32HannWindowTransformer::new();
     let fft_transformer = FFTtransformer::<f32>::new(config.buffer_size);
+    let buffer_size = config.buffer_size;
+    let hann_function = move |(i, v): (usize, f32)| f32_hann_window(i, v, buffer_size);
 
-    let pipelined_transformer = {
-        let opt_pl_transformer_1 = OptionalPipelineTransformer::new(
-            Box::new(stutter_transformer),
-            Box::new(itf_vec_tranformer),
-        );
-        let opt_pl_transformer_2 = OptionalPipelineTransformer::new(
-            Box::new(opt_pl_transformer_1),
-            Box::new(norm_vec_transformer),
-        );
-        let opt_pl_transformer_3 = OptionalPipelineTransformer::new(
-            Box::new(opt_pl_transformer_2),
-            Box::new(hann_transformer),
-        );
-
-        OptionalPipelineTransformer::new(Box::new(opt_pl_transformer_3), Box::new(fft_transformer))
-    };
-
-    let band_transformer = if config.window_size > 1 {
-        let f32_window_transformer = F32WindowAverageTransformer::new(config.window_size);
-        OptionalPipelineTransformer::new(
-            Box::new(pipelined_transformer),
-            Box::new(f32_window_transformer),
-        )
-    } else {
-        pipelined_transformer
-    };
-
-    Box::new(band_transformer)
+    let casted_to_f32 = OptionalPipelineTransformer::new(
+        Box::new(stutter_transformer),
+        Box::new(IteratorMapper::new(|i: i16| i as f32)),
+    );
+    let normalized = OptionalPipelineTransformer::new(
+        Box::new(casted_to_f32),
+        Box::new(IteratorMapper::new(|f: f32| f / i16::max_value() as f32)),
+    );
+    let hanned = OptionalPipelineTransformer::new(
+        Box::new(normalized),
+        Box::new(IteratorEnumMapper::new(hann_function)),
+    );
+    Box::new(OptionalPipelineTransformer::new(
+        Box::new(hanned),
+        Box::new(fft_transformer),
+    ))
 }
 
 pub fn build_spectrogram_transformer(
@@ -138,41 +122,41 @@ pub fn build_spectrogram_transformer(
 ) -> Box<dyn Transformer<Input = TwoChannel<i16>, Output = Option<Vec<f32>>>> {
     assert!(channel_size == 2, "Only two channels currently supported");
 
-    let two_channel_combiner = VectorTwoChannelCombiner::new(
+    let combined_channels = VectorTwoChannelCombiner::new(
         build_single_channel_transformer(config),
         build_single_channel_transformer(config),
-        vec![0.0; config.buffer_size / config.window_size],
     );
 
-    Box::new(OptionalPipelineTransformer::new(
+    let averaged_channels = OptionalPipelineTransformer::new(
+        Box::new(combined_channels),
+        Box::new(IteratorMapper::new(|x: TwoChannel<f32>| (x.0 + x.1) / 2.0)),
+    );
+
+    let maybe_log_normalized: Box<
+        dyn Transformer<Input = TwoChannel<i16>, Output = Option<Box<dyn Iterator<Item = f32>>>>,
+    > = if config.log_scaling {
         Box::new(OptionalPipelineTransformer::new(
-            Box::new(two_channel_combiner),
-            Box::new(IteratorMapper::new(|x: TwoChannel<f32>| (x.0 + x.1) / 2.0)),
+            Box::new(averaged_channels),
+            Box::new(IteratorMapper::new(f32_log_normalize)),
+        ))
+    } else {
+        Box::new(averaged_channels)
+    };
+
+    let maybe_sub_sequenced: Box<
+        dyn Transformer<Input = TwoChannel<i16>, Output = Option<Box<dyn Iterator<Item = f32>>>>,
+    > = match config.band_subset {
+        Some(subset) => Box::new(OptionalPipelineTransformer::new(
+            maybe_log_normalized,
+            Box::new(IteratorSubSequencer::new(subset.start, subset.end)),
         )),
+        None => maybe_log_normalized,
+    };
+
+    Box::new(OptionalPipelineTransformer::new(
+        maybe_sub_sequenced,
         Box::new(IteratorCollector::new()),
     ))
-    // let opt_pl_transformer_3_boxed: Box<
-    //     dyn Transformer<Input = Vec<i16>, Output = Option<Vec<f32>>>,
-    // > = if config.log_scaling {
-    //     let norm_transformer = F32NormalizeByLogTransformer::new();
-    //     Box::new(OptionalPipelineTransformer::new(
-    //         Box::new(opt_pl_transformer_2),
-    //         Box::new(norm_transformer),
-    //     ))
-    // } else {
-    //     Box::new(opt_pl_transformer_2)
-    // };
-
-    // match config.band_subset {
-    //     Some(subset) => {
-    //         let sub_transformer = VectorSubTransformer::new(subset.start, subset.end);
-    //         Box::new(OptionalPipelineTransformer::new(
-    //             opt_pl_transformer_3_boxed,
-    //             Box::new(sub_transformer),
-    //         ))
-    //     }
-    //     None => opt_pl_transformer_3_boxed,
-    // }
 }
 
 pub fn generate_data<D: RawStream<i16> + 'static>(mut decoder: D, config: Config) -> Vec<Vec<f32>> {

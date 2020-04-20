@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct SubsetConfig {
     pub start: usize,
     pub end: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct SpectrogramConfig {
     // Size of circular buffer for audio data points and as a result, number of data points that
     // are input into the FFT transform. The output of the transform will be of the same size but
@@ -17,12 +17,8 @@ pub struct SpectrogramConfig {
     // Every `stutter_size` data points, we run the FFT transform on the current circular buffer
     // (assuming there are currently enough values in it).
     pub stutter_size: usize,
-    // Size of window for averaging frequency bins. If this is set to 1, will not do any averaging,
-    // which is currently preferred.
-    pub window_size: usize,
     // What subset of bands to include in the output. Usually you want this to be buffer_size / 2
-    // so that you pick up only the positive coefficients. Note that this is applied AFTER
-    // windowing.
+    // so that you pick up only the positive coefficients.
     pub band_subset: Option<SubsetConfig>,
     // Scale the output of the FFT logarithmically.
     pub log_scaling: bool,
@@ -40,24 +36,15 @@ impl SpectrogramConfig {
     fn validate(&self) -> Result<(), String> {
         assertion(self.buffer_size > 0, "buffer_size must be greater than 0")?;
         assertion(self.stutter_size > 0, "stutter_size must be greater than 0")?;
-        assertion(self.window_size > 0, "window_size must be greater than 0")?;
         assertion(
             self.buffer_size % 2 == 0,
             "buffer_size must be divisible by 2",
-        )?;
-        assertion(
-            self.buffer_size % self.window_size == 0,
-            "buffer_size must be divisible by window_size",
         )?;
         match &self.band_subset {
             Some(subset) => {
                 assertion(
                     subset.start <= subset.end,
                     "band_subset.start must be at most band_subset.end",
-                )?;
-                assertion(
-                    subset.end <= self.buffer_size / self.window_size,
-                    "band_subset.end must be at most buffer_size",
                 )?;
                 Result::<(), String>::Ok(())
             }
@@ -67,7 +54,7 @@ impl SpectrogramConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     pub spectrogram: SpectrogramConfig,
 }
