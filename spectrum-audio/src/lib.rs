@@ -17,7 +17,7 @@ pub mod shared_data;
 
 use concurrent_tee::ConcurrentTee;
 use config::{Config, SpectrogramConfig};
-use mappers::{f32_hann_window, f32_log_normalize};
+use mappers::{f32_hann_window, f32_log_compression};
 use raw_stream::RawStream;
 use shared_data::SharedData;
 use transforms::{
@@ -134,7 +134,7 @@ pub fn build_spectrogram_transformer(
     > = if config.log_scaling {
         Box::new(OptionalPipelineTransformer::new(
             Box::new(averaged_channels),
-            Box::new(IteratorMapper::new(f32_log_normalize)),
+            Box::new(IteratorMapper::new(f32_log_compression)),
         ))
     } else {
         Box::new(averaged_channels)

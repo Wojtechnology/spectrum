@@ -10,16 +10,15 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     let config = SpectrogramConfig {
         buffer_size: 1024,
         stutter_size: 512,
-        window_size: 1,
         band_subset: Some(SubsetConfig { start: 0, end: 512 }),
         log_scaling: false,
     };
-    let mut transformer = build_spectrogram_transformer(config, 2);
+    let mut transformer = build_spectrogram_transformer(&config, 2);
     c.bench_function("spectrogram transformer", |b| {
         b.iter(|| {
             let mut rng = rand::thread_rng();
             for _ in 0..NUM_SAMPLES {
-                transformer.transform(black_box(vec![rng.gen(), rng.gen()]));
+                transformer.transform(black_box((rng.gen(), rng.gen())));
             }
         })
     });

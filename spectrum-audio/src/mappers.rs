@@ -1,7 +1,7 @@
-const F32_LOG_C: f32 = 1e-7;
+const F32_COMPRESSION_FACTOR: f32 = 1.0;
 
-pub fn f32_log_normalize(input: f32) -> f32 {
-    (input + F32_LOG_C).ln()
+pub fn f32_log_compression(input: f32) -> f32 {
+    (1.0 + F32_COMPRESSION_FACTOR * input).ln() / (1.0 + F32_COMPRESSION_FACTOR).ln()
 }
 
 // Not strictly a mapper, but helps with building one
