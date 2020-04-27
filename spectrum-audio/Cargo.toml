@@ -17,7 +17,3 @@ serde_yaml = "0.8"
 [dev-dependencies]
 criterion = "0.3"
 rand = "0.7"
-
-[[bench]]
-name = "transformer_bench"
-harness = false

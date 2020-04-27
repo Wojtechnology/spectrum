@@ -208,6 +208,38 @@ impl<I, O: Clone + 'static> Transformer for VectorTwoChannelCombiner<I, O> {
 
 // END: VectorTwoChannelCombiner
 
+// BEGIN: Mapper
+
+pub struct Mapper<I, O, F>
+where
+    F: Fn(I) -> O + Copy + 'static,
+{
+    f: F,
+    i_phantom: PhantomData<I>,
+    o_phantom: PhantomData<O>,
+}
+
+impl<I, O, F: Fn(I) -> O + Copy + 'static> Mapper<I, O, F> {
+    pub fn new(f: F) -> Self {
+        Self {
+            f,
+            i_phantom: PhantomData,
+            o_phantom: PhantomData,
+        }
+    }
+}
+
+impl<I: 'static, O, F: Fn(I) -> O + Copy + 'static> Transformer for Mapper<I, O, F> {
+    type Input = I;
+    type Output = O;
+
+    fn transform(&mut self, input: I) -> O {
+        self.f(i)
+    }
+}
+
+// END: Mapper
+
 // BEGIN: IteratorMapper
 
 pub struct IteratorMapper<I, O, F>
