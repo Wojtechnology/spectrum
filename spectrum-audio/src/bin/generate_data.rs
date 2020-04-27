@@ -3,8 +3,8 @@ use std::fs::File;
 use std::io::Read;
 use std::process;
 
+use spectrum_audio::audio_loop::generate_data;
 use spectrum_audio::config::Config;
-use spectrum_audio::generate_data;
 use spectrum_audio::mp3::Mp3Decoder;
 
 // TODO: Should really replace all of this with some command line arg parsing library.

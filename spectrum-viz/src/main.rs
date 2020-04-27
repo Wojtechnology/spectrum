@@ -5,9 +5,9 @@ use std::process;
 use std::sync::{Arc, RwLock};
 use std::thread;
 
+use spectrum_audio::audio_loop::run_audio_loop;
 use spectrum_audio::config::Config;
 use spectrum_audio::mp3::Mp3Decoder;
-use spectrum_audio::run_audio_loop;
 use spectrum_audio::shared_data::SharedData;
 use spectrum_viz::event_loop;
 
