@@ -160,6 +160,37 @@ impl<I, M, O> Transformer for OptionalPipelineTransformer<I, M, O> {
 
 // END: OptionalPipelineTransformer
 
+// BEGIN: PipelineTransformer
+
+pub struct PipelineTransformer<I, M, O> {
+    transformer_one: Box<dyn Transformer<Input = I, Output = M>>,
+    transformer_two: Box<dyn Transformer<Input = M, Output = O>>,
+}
+
+impl<I, M, O> PipelineTransformer<I, M, O> {
+    pub fn new(
+        transformer_one: Box<dyn Transformer<Input = I, Output = M>>,
+        transformer_two: Box<dyn Transformer<Input = M, Output = O>>,
+    ) -> Self {
+        Self {
+            transformer_one,
+            transformer_two,
+        }
+    }
+}
+
+impl<I, M, O> Transformer for PipelineTransformer<I, M, O> {
+    type Input = I;
+    type Output = O;
+
+    fn transform(&mut self, input: I) -> O {
+        self.transformer_two
+            .transform(self.transformer_one.transform(input))
+    }
+}
+
+// END: PipelineTransformer
+
 // BEGIN: VectorTwoChannelCombiner
 
 pub type TwoChannel<T> = (T, T);
@@ -234,7 +265,7 @@ impl<I: 'static, O, F: Fn(I) -> O + Copy + 'static> Transformer for Mapper<I, O,
     type Output = O;
 
     fn transform(&mut self, input: I) -> O {
-        self.f(i)
+        (self.f)(input)
     }
 }
 
