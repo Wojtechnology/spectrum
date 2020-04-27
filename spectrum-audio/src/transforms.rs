@@ -14,13 +14,13 @@ pub trait Transformer {
     fn transform(&mut self, input: Self::Input) -> Self::Output;
 }
 
-// BEGIN: FFTtransformer
+// BEGIN: FFTTransformer
 
-pub struct FFTtransformer<T: FFTval> {
+pub struct FFTTransformer<T: FFTval> {
     fft: Arc<dyn FFT<T>>,
 }
 
-impl<T: FFTval> FFTtransformer<T> {
+impl<T: FFTval> FFTTransformer<T> {
     pub fn new(size: usize) -> Self {
         Self {
             fft: FFTplanner::new(false).plan_fft(size),
@@ -62,7 +62,7 @@ impl FFTval for f64 {
     }
 }
 
-impl<T: FFTval> Transformer for FFTtransformer<T> {
+impl<T: FFTval> Transformer for FFTTransformer<T> {
     type Input = Box<dyn Iterator<Item = T>>;
     type Output = Box<dyn Iterator<Item = T>>;
 
@@ -80,7 +80,7 @@ impl<T: FFTval> Transformer for FFTtransformer<T> {
     }
 }
 
-// END: FFTtransformer
+// END: FFTTransformer
 
 // BEGIN: StutterAggregatorTranformer
 

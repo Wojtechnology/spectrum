@@ -1,7 +1,7 @@
 use crate::config::SpectrogramConfig;
 use crate::mappers::{f32_hann_window, f32_log_compression};
 use crate::transforms::{
-    FFTtransformer, IteratorCollector, IteratorEnumMapper, IteratorMapper, IteratorSubSequencer,
+    FFTTransformer, IteratorCollector, IteratorEnumMapper, IteratorMapper, IteratorSubSequencer,
     Mapper, OptionalPipelineTransformer, PipelineTransformer, StutterAggregatorTranformer,
     Transformer, TwoChannel, VectorTwoChannelCombiner,
 };
@@ -31,7 +31,7 @@ pub fn build_spectrogram_transformer(
     );
     let ffted = OptionalPipelineTransformer::new(
         Box::new(hanned_window),
-        Box::new(FFTtransformer::<f32>::new(config.buffer_size)),
+        Box::new(FFTTransformer::<f32>::new(config.buffer_size)),
     );
 
     let maybe_sub_sequenced: Box<
