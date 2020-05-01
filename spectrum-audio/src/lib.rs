@@ -1,6 +1,6 @@
 mod concurrent_tee;
 mod cyclical_buffer;
-mod mappers;
+mod math;
 mod transforms;
 
 pub mod audio_loop;

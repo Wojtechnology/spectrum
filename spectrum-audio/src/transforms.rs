@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use num_complex::Complex;
 use num_traits::Zero;
-use rustfft::{FFTnum, FFTplanner, FFT};
+use rustfft::{FFTplanner, FFT};
 
 use crate::cyclical_buffer::CyclicalBuffer;
 
@@ -16,11 +16,11 @@ pub trait Transformer {
 
 // BEGIN: FFTTransformer
 
-pub struct FFTTransformer<T: FFTval> {
-    fft: Arc<dyn FFT<T>>,
+pub struct FFTTransformer {
+    fft: Arc<dyn FFT<f32>>,
 }
 
-impl<T: FFTval> FFTTransformer<T> {
+impl FFTTransformer {
     pub fn new(size: usize) -> Self {
         Self {
             fft: FFTplanner::new(false).plan_fft(size),
@@ -28,55 +28,21 @@ impl<T: FFTval> FFTTransformer<T> {
     }
 }
 
-pub trait FFTval: FFTnum + Clone {
-    fn cast_and_sqrt(size: usize) -> Self;
-    fn sqrt(f: Self) -> Self;
-    fn real_to_complex(f: Self) -> Complex<Self>;
-}
+impl Transformer for FFTTransformer {
+    type Input = Box<dyn Iterator<Item = f32>>;
+    type Output = Box<dyn Iterator<Item = Complex<f32>>>;
 
-impl FFTval for f32 {
-    fn cast_and_sqrt(size: usize) -> f32 {
-        (size as f32).sqrt()
-    }
-
-    fn sqrt(f: f32) -> f32 {
-        f.sqrt()
-    }
-
-    fn real_to_complex(f: f32) -> Complex<f32> {
-        Complex::new(f, 0.0)
-    }
-}
-
-impl FFTval for f64 {
-    fn cast_and_sqrt(size: usize) -> f64 {
-        (size as f64).sqrt()
-    }
-
-    fn sqrt(f: f64) -> f64 {
-        f.sqrt()
-    }
-
-    fn real_to_complex(f: f64) -> Complex<f64> {
-        Complex::new(f, 0.0)
-    }
-}
-
-impl<T: FFTval> Transformer for FFTTransformer<T> {
-    type Input = Box<dyn Iterator<Item = T>>;
-    type Output = Box<dyn Iterator<Item = T>>;
-
-    fn transform(&mut self, input: Box<dyn Iterator<Item = T>>) -> Box<dyn Iterator<Item = T>> {
-        let mut m_input: Vec<_> = input.map(|v| T::real_to_complex(v)).collect();
+    fn transform(
+        &mut self,
+        input: Box<dyn Iterator<Item = f32>>,
+    ) -> Box<dyn Iterator<Item = Complex<f32>>> {
+        let mut m_input: Vec<_> = input.map(|v| Complex::new(v, 0.0)).collect();
         let mut m_output = vec![Complex::zero(); self.fft.len()];
         self.fft.process(&mut m_input, &mut m_output);
 
         // normalize
-        let len_sqrt = T::cast_and_sqrt(self.fft.len());
-        Box::new(m_output.into_iter().map(move |elem| {
-            let c = elem / len_sqrt;
-            T::sqrt(c.re * c.re + c.im * c.im)
-        }))
+        let len_sqrt = (self.fft.len() as f32).sqrt();
+        Box::new(m_output.into_iter().map(move |elem| elem / len_sqrt))
     }
 }
 

@@ -8,7 +8,7 @@ use crate::concurrent_tee::ConcurrentTee;
 use crate::config::Config;
 use crate::raw_stream::RawStream;
 use crate::shared_data::SharedData;
-use crate::spectrogram::build_spectrogram_transformer;
+use crate::spectrogram::spectrogram_viz_transformer;
 use crate::transforms::{Transformer, TwoChannel};
 
 fn find_format_with_sample_rate<D: RawStream<i16>>(
@@ -74,7 +74,7 @@ fn push_sample<I: Iterator<Item = i16>>(
 pub fn generate_data<D: RawStream<i16> + 'static>(mut decoder: D, config: Config) -> Vec<Vec<f32>> {
     let channels = decoder.channels();
     assert!(channels == 2, "Generating data only supports 2 channels");
-    let mut transformer = build_spectrogram_transformer(&config.spectrogram, channels);
+    let mut transformer = spectrogram_viz_transformer(&config.spectrogram, channels);
     let mut output = vec![];
     loop {
         let sample = match (decoder.next(), decoder.next()) {
@@ -117,7 +117,7 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
 
     thread::spawn(move || {
         let mut cur_idx: u64 = 0;
-        let mut transformer = build_spectrogram_transformer(&config.spectrogram, channels);
+        let mut transformer = spectrogram_viz_transformer(&config.spectrogram, channels);
         loop {
             let (lower_bound, upper_bound) = {
                 let bounds = idx_bounds_one.read().unwrap();
