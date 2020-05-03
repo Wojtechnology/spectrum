@@ -157,54 +157,6 @@ impl<I, M, O> Transformer for PipelineTransformer<I, M, O> {
 
 // END: PipelineTransformer
 
-// BEGIN: VectorTwoChannelCombiner
-
-pub type TwoChannel<T> = (T, T);
-
-pub struct VectorTwoChannelCombiner<I, O: Clone> {
-    transformer_one: Box<dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>>,
-    transformer_two: Box<dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>>,
-}
-
-impl<I, O: Clone + 'static> VectorTwoChannelCombiner<I, O> {
-    pub fn new(
-        transformer_one: Box<
-            dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>,
-        >,
-        transformer_two: Box<
-            dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>,
-        >,
-    ) -> Self {
-        Self {
-            transformer_one,
-            transformer_two,
-        }
-    }
-}
-
-impl<I, O: Clone + 'static> Transformer for VectorTwoChannelCombiner<I, O> {
-    type Input = TwoChannel<I>;
-    type Output = Option<Box<dyn Iterator<Item = TwoChannel<O>>>>;
-
-    fn transform(
-        &mut self,
-        input: TwoChannel<I>,
-    ) -> Option<Box<dyn Iterator<Item = TwoChannel<O>>>> {
-        match (
-            self.transformer_one.transform(input.0),
-            self.transformer_two.transform(input.1),
-        ) {
-            (Some(l), Some(r)) => Some(Box::new(l.zip(r).map(|(l, r)| (l, r)))),
-            (None, None) => None,
-            // Possibly just log and don't actually panic, although this should really never
-            // happen unless something is set up wrong with the program.
-            _ => panic!("Unsynchronized channel transformers"),
-        }
-    }
-}
-
-// END: VectorTwoChannelCombiner
-
 // BEGIN: Mapper
 
 pub struct Mapper<I, O, F>
@@ -357,3 +309,88 @@ impl<T: 'static> Transformer for IteratorSubSequencer<T> {
 }
 
 // END: IteratorSubSequencer
+
+// BEGIN: BRPeakPicker
+// Peak picker as defined in the BeatRoot paper:
+// https://www.eecs.qmul.ac.uk/~simond/pub/2007/jnmr07.pdf
+
+pub struct BRPeakPicker {
+    buf: CyclicalBuffer<f32>,
+    cur_idx: u64,
+    w: usize,
+    alpha: f32,
+    gamma: f32,
+}
+
+impl BRPeakPicker {
+    pub fn new(w: usize, m: usize, gamma: f32, alpha: f32) -> Self {
+        Self {
+            buf: CyclicalBuffer::new(w * (m + 1) + 1),
+            cur_idx: 0,
+            w,
+            alpha,
+            gamma,
+        }
+    }
+}
+
+impl Transformer for BRPeakPicker {
+    type Input = f32;
+    type Output = Option<u64>; // Index of picked peak.
+
+    fn transform(&mut self, input: f32) -> Option<u64> {
+        self.buf.push(input);
+        // let values = self.buf.get_values();
+        None
+    }
+}
+
+// END: PeakPicker
+
+// UNUSED...
+
+// BEGIN: VectorTwoChannelCombiner
+
+// pub struct VectorTwoChannelCombiner<I, O: Clone> {
+//     transformer_one: Box<dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>>,
+//     transformer_two: Box<dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>>,
+// }
+//
+// impl<I, O: Clone + 'static> VectorTwoChannelCombiner<I, O> {
+//     pub fn new(
+//         transformer_one: Box<
+//             dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>,
+//         >,
+//         transformer_two: Box<
+//             dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>,
+//         >,
+//     ) -> Self {
+//         Self {
+//             transformer_one,
+//             transformer_two,
+//         }
+//     }
+// }
+//
+// impl<I, O: Clone + 'static> Transformer for VectorTwoChannelCombiner<I, O> {
+//     type Input = TwoChannel<I>;
+//     type Output = Option<Box<dyn Iterator<Item = TwoChannel<O>>>>;
+//
+//     fn transform(
+//         &mut self,
+//         input: TwoChannel<I>,
+//     ) -> Option<Box<dyn Iterator<Item = TwoChannel<O>>>> {
+//         match (
+//             self.transformer_one.transform(input.0),
+//             self.transformer_two.transform(input.1),
+//         ) {
+//             (Some(l), Some(r)) => Some(Box::new(l.zip(r).map(|(l, r)| (l, r)))),
+//             (None, None) => None,
+//             // Possibly just log and don't actually panic, although this should really never
+//             // happen unless something is set up wrong with the program.
+//             _ => panic!("Unsynchronized channel transformers"),
+//         }
+//     }
+// }
+
+// END: VectorTwoChannelCombiner

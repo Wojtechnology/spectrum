@@ -5,8 +5,10 @@ use crate::math::{complex_l2_norm, hann_window, log_compression};
 use crate::transforms::{
     FFTTransformer, IteratorCollector, IteratorEnumMapper, IteratorMapper, IteratorSubSequencer,
     Mapper, OptionalPipelineTransformer, PipelineTransformer, StutterAggregatorTranformer,
-    Transformer, TwoChannel,
+    Transformer,
 };
+
+pub type TwoChannel<T> = (T, T);
 
 #[inline(always)]
 fn normalize_i16(v: i16) -> f32 {

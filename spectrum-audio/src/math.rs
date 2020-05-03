@@ -18,3 +18,7 @@ pub fn complex_l1_norm(c: Complex<f32>) -> f32 {
 pub fn complex_l2_norm(c: Complex<f32>) -> f32 {
     (c.re * c.re + c.im * c.im).sqrt()
 }
+
+pub fn spectral_flux(it: Box<dyn Iterator<Item = f32>>) -> f32 {
+    return it.fold(0.0, |acc, x| acc + x.max(0.0));
+}

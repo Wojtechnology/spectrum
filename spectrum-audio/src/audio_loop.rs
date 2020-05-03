@@ -1,37 +1,56 @@
 use std::sync::{Arc, RwLock};
 use std::thread;
 
-use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
+use cpal::traits::{EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
 
 use crate::concurrent_tee::ConcurrentTee;
 use crate::config::Config;
-use crate::raw_stream::RawStream;
+use crate::raw_stream::{find_format_with_sample_rate, RawStream};
 use crate::shared_data::SharedData;
-use crate::spectrogram::spectrogram_viz_transformer;
-use crate::transforms::{Transformer, TwoChannel};
+use crate::spectrogram::{spectrogram_viz_transformer, TwoChannel};
+use crate::transforms::Transformer;
 
-fn find_format_with_sample_rate<D: RawStream<i16>>(
-    decoder: &D,
-    device: &cpal::Device,
-) -> cpal::Format {
-    let mut supported_formats_range = device
-        .supported_output_formats()
-        .expect("error while querying_formats");
-    let decoder_sample_rate = decoder.sample_rate() as u32;
-    loop {
-        let supported_format = supported_formats_range
-            .next()
-            .expect("Couldn't find a suitable output format");
-        if decoder_sample_rate >= supported_format.min_sample_rate.0
-            && decoder_sample_rate <= supported_format.max_sample_rate.0
-        {
-            break cpal::Format {
-                channels: supported_format.channels,
-                sample_rate: cpal::SampleRate(decoder_sample_rate),
-                data_type: supported_format.data_type,
-            };
+struct AudioLoopState<I: Iterator<Item = i16>> {
+    sample_iter: I,
+    cur_idx: u64,
+    fft_transformer: Box<dyn Transformer<Input = TwoChannel<i16>, Output = Option<Vec<f32>>>>,
+    shared_data: Arc<RwLock<SharedData>>,
+}
+
+impl<I: Iterator<Item = i16>> AudioLoopState<I> {
+    pub fn new(
+        sample_iter: I,
+        fft_transformer: Box<dyn Transformer<Input = TwoChannel<i16>, Output = Option<Vec<f32>>>>,
+        shared_data: Arc<RwLock<SharedData>>,
+    ) -> Self {
+        Self {
+            sample_iter,
+            cur_idx: 0,
+            fft_transformer,
+            shared_data,
         }
+    }
+
+    pub fn push_next_sample(&mut self) -> bool {
+        let sample = match (self.sample_iter.next(), self.sample_iter.next()) {
+            (Some(l), Some(r)) => (l, r),
+            _ => return false,
+        };
+        self.cur_idx += 2;
+
+        match self.fft_transformer.transform(sample) {
+            Some(output) => {
+                let mut data = self.shared_data.write().unwrap();
+                data.set_bands(output);
+            }
+            None => {}
+        }
+        return true;
+    }
+
+    pub fn get_cur_idx(&self) -> u64 {
+        self.cur_idx
     }
 }
 
@@ -47,46 +66,6 @@ impl IdxBounds {
             lower_bound: 0,
         }
     }
-}
-
-fn push_sample<I: Iterator<Item = i16>>(
-    iter: &mut I,
-    cur_idx: &mut u64,
-    transformer: &mut Box<dyn Transformer<Input = TwoChannel<i16>, Output = Option<Vec<f32>>>>,
-    shared_data: Arc<RwLock<SharedData>>,
-) -> bool {
-    let sample = match (iter.next(), iter.next()) {
-        (Some(l), Some(r)) => (l, r),
-        _ => return false,
-    };
-    *cur_idx += 2;
-
-    match transformer.transform(sample) {
-        Some(output) => {
-            let mut data = shared_data.write().unwrap();
-            data.set_bands(output);
-        }
-        None => {}
-    }
-    return true;
-}
-
-pub fn generate_data<D: RawStream<i16> + 'static>(mut decoder: D, config: Config) -> Vec<Vec<f32>> {
-    let channels = decoder.channels();
-    assert!(channels == 2, "Generating data only supports 2 channels");
-    let mut transformer = spectrogram_viz_transformer(&config.spectrogram, channels);
-    let mut output = vec![];
-    loop {
-        let sample = match (decoder.next(), decoder.next()) {
-            (Some(l), Some(r)) => (l, r),
-            _ => break,
-        };
-        match transformer.transform(sample) {
-            Some(bands) => output.push(bands),
-            None => (),
-        };
-    }
-    output
 }
 
 pub fn run_audio_loop<D: RawStream<i16> + 'static>(
@@ -113,33 +92,24 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
     // Init concurrent state
     let idx_bounds_one = Arc::new(RwLock::new(IdxBounds::new()));
     let idx_bounds_two = idx_bounds_one.clone();
-    let (mut decoder_a, mut decoder_b) = ConcurrentTee::new(decoder);
+    let (mut decoder_a, decoder_b) = ConcurrentTee::new(decoder);
 
     thread::spawn(move || {
-        let mut cur_idx: u64 = 0;
-        let mut transformer = spectrogram_viz_transformer(&config.spectrogram, channels);
+        let fft_transformer = spectrogram_viz_transformer(&config.spectrogram, channels);
+        let mut state = AudioLoopState::new(decoder_b, fft_transformer, shared_data);
+
         loop {
             let (lower_bound, upper_bound) = {
                 let bounds = idx_bounds_one.read().unwrap();
                 (bounds.lower_bound, bounds.upper_bound)
             };
-            while cur_idx < lower_bound {
-                if !push_sample(
-                    &mut decoder_b,
-                    &mut cur_idx,
-                    &mut transformer,
-                    shared_data.clone(),
-                ) {
+            while state.get_cur_idx() < lower_bound {
+                if !state.push_next_sample() {
                     return;
                 }
             }
-            if cur_idx < upper_bound {
-                if !push_sample(
-                    &mut decoder_b,
-                    &mut cur_idx,
-                    &mut transformer,
-                    shared_data.clone(),
-                ) {
+            if state.get_cur_idx() < upper_bound {
+                if !state.push_next_sample() {
                     return;
                 }
             }
@@ -196,9 +166,27 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
             _ => (),
         }
 
-        // Update bounds
+        // Update bounds for synchronization
         let mut bounds = idx_bounds_two.write().unwrap();
         bounds.lower_bound = bounds.upper_bound;
         bounds.upper_bound += buffer_count;
     });
+}
+
+pub fn generate_data<D: RawStream<i16> + 'static>(mut decoder: D, config: Config) -> Vec<Vec<f32>> {
+    let channels = decoder.channels();
+    assert!(channels == 2, "Generating data only supports 2 channels");
+    let mut transformer = spectrogram_viz_transformer(&config.spectrogram, channels);
+    let mut output = vec![];
+    loop {
+        let sample = match (decoder.next(), decoder.next()) {
+            (Some(l), Some(r)) => (l, r),
+            _ => break,
+        };
+        match transformer.transform(sample) {
+            Some(bands) => output.push(bands),
+            None => (),
+        };
+    }
+    output
 }
