@@ -3,31 +3,43 @@ use std::thread;
 
 use cpal::traits::{EventLoopTrait, HostTrait};
 use cpal::{Sample, StreamData, UnknownTypeOutputBuffer};
+use num_complex::Complex;
 
+use crate::beat_tracking::beat_tracking_transformer;
 use crate::concurrent_tee::ConcurrentTee;
 use crate::config::Config;
 use crate::raw_stream::{find_format_with_sample_rate, RawStream};
 use crate::shared_data::SharedData;
-use crate::spectrogram::{spectrogram_viz_transformer, TwoChannel};
+use crate::spectrogram::{
+    fft_transformer, spectrogram_viz_transformer, viz_transformer, TwoChannel,
+};
 use crate::transforms::Transformer;
 
 struct AudioLoopState<I: Iterator<Item = i16>> {
     sample_iter: I,
     cur_idx: u64,
-    fft_transformer: Box<dyn Transformer<Input = TwoChannel<i16>, Output = Option<Vec<f32>>>>,
+    fft_transformer:
+        Box<dyn Transformer<Input = TwoChannel<i16>, Output = Option<Vec<Complex<f32>>>>>,
+    viz_transformer:
+        Box<dyn Transformer<Input = Box<dyn Iterator<Item = Complex<f32>>>, Output = Vec<f32>>>,
+    bt_transformer:
+        Box<dyn Transformer<Input = Box<dyn Iterator<Item = Complex<f32>>>, Output = bool>>,
     shared_data: Arc<RwLock<SharedData>>,
 }
 
 impl<I: Iterator<Item = i16>> AudioLoopState<I> {
     pub fn new(
+        config: &Config,
+        channels: usize,
         sample_iter: I,
-        fft_transformer: Box<dyn Transformer<Input = TwoChannel<i16>, Output = Option<Vec<f32>>>>,
         shared_data: Arc<RwLock<SharedData>>,
     ) -> Self {
         Self {
             sample_iter,
             cur_idx: 0,
-            fft_transformer,
+            fft_transformer: fft_transformer(&config.spectrogram, channels),
+            viz_transformer: viz_transformer(&config.spectrogram),
+            bt_transformer: beat_tracking_transformer(),
             shared_data,
         }
     }
@@ -40,9 +52,21 @@ impl<I: Iterator<Item = i16>> AudioLoopState<I> {
         self.cur_idx += 2;
 
         match self.fft_transformer.transform(sample) {
-            Some(output) => {
+            Some(fft_complex) => {
+                let fft_complex_for_bt = fft_complex.clone();
+
+                if self
+                    .bt_transformer
+                    .transform(Box::new(fft_complex_for_bt.into_iter()))
+                {
+                    println!("Beat");
+                };
+
+                let spect_viz = self
+                    .viz_transformer
+                    .transform(Box::new(fft_complex.into_iter()));
                 let mut data = self.shared_data.write().unwrap();
-                data.set_bands(output);
+                data.set_bands(spect_viz);
             }
             None => {}
         }
@@ -95,8 +119,7 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
     let (mut decoder_a, decoder_b) = ConcurrentTee::new(decoder);
 
     thread::spawn(move || {
-        let fft_transformer = spectrogram_viz_transformer(&config.spectrogram, channels);
-        let mut state = AudioLoopState::new(decoder_b, fft_transformer, shared_data);
+        let mut state = AudioLoopState::new(&config, channels, decoder_b, shared_data);
 
         loop {
             let (lower_bound, upper_bound) = {
@@ -173,7 +196,10 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
     });
 }
 
-pub fn generate_data<D: RawStream<i16> + 'static>(mut decoder: D, config: Config) -> Vec<Vec<f32>> {
+pub fn generate_data<D: RawStream<i16> + 'static>(
+    mut decoder: D,
+    config: &Config,
+) -> Vec<Vec<f32>> {
     let channels = decoder.channels();
     assert!(channels == 2, "Generating data only supports 2 channels");
     let mut transformer = spectrogram_viz_transformer(&config.spectrogram, channels);

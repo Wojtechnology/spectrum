@@ -81,7 +81,7 @@ fn main() {
         }
     };
 
-    let data = generate_data(decoder, config);
+    let data = generate_data(decoder, &config);
     for row in data.iter() {
         for &val in row.iter() {
             print!("{} ", val);

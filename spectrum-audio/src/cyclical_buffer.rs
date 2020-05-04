@@ -18,6 +18,10 @@ impl<T: Copy> CyclicalBuffer<T> {
         self.buf.len()
     }
 
+    pub fn full(&self) -> bool {
+        self.buf.len() == self.size
+    }
+
     pub fn push(&mut self, val: T) {
         if self.len() < self.size {
             self.buf.push(val);

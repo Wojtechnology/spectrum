@@ -54,7 +54,7 @@ pub fn fft_transformer(
     ))
 }
 
-fn fft_viz_transformer(
+pub fn viz_transformer(
     config: &SpectrogramConfig,
 ) -> Box<dyn Transformer<Input = Box<dyn Iterator<Item = Complex<f32>>>, Output = Vec<f32>>> {
     let l2_transformer = IteratorMapper::new(complex_l2_norm);
@@ -95,7 +95,7 @@ pub fn spectrogram_viz_transformer(
     channel_size: usize,
 ) -> Box<dyn Transformer<Input = TwoChannel<i16>, Output = Option<Vec<f32>>>> {
     let fft_transformer = iter_fft_transformer(config, channel_size);
-    let viz_transformer = fft_viz_transformer(config);
+    let viz_transformer = viz_transformer(config);
     Box::new(OptionalPipelineTransformer::new(
         fft_transformer,
         viz_transformer,

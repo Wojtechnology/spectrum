@@ -2,6 +2,7 @@ mod beat_tracking;
 mod concurrent_tee;
 mod cyclical_buffer;
 mod math;
+mod running_stat;
 mod spectrogram;
 mod transforms;
 

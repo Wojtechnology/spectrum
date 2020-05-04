@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -6,6 +8,7 @@ use num_traits::Zero;
 use rustfft::{FFTplanner, FFT};
 
 use crate::cyclical_buffer::CyclicalBuffer;
+use crate::spectrogram::TwoChannel;
 
 pub trait Transformer {
     type Input;
@@ -314,10 +317,17 @@ impl<T: 'static> Transformer for IteratorSubSequencer<T> {
 // Peak picker as defined in the BeatRoot paper:
 // https://www.eecs.qmul.ac.uk/~simond/pub/2007/jnmr07.pdf
 
+// Computed over one kiss l2 normalized. Should recompute over larger number of songs and l1
+// normalization.
+const BR_MEAN: f32 = 2.238;
+const BR_STDEV: f32 = 1.705;
+
 pub struct BRPeakPicker {
     buf: CyclicalBuffer<f32>,
     cur_idx: u64,
+    decay_avg: f32,
     w: usize,
+    m: usize,
     alpha: f32,
     gamma: f32,
 }
@@ -327,7 +337,9 @@ impl BRPeakPicker {
         Self {
             buf: CyclicalBuffer::new(w * (m + 1) + 1),
             cur_idx: 0,
+            decay_avg: 0.0,
             w,
+            m,
             alpha,
             gamma,
         }
@@ -339,58 +351,136 @@ impl Transformer for BRPeakPicker {
     type Output = Option<u64>; // Index of picked peak.
 
     fn transform(&mut self, input: f32) -> Option<u64> {
-        self.buf.push(input);
-        // let values = self.buf.get_values();
-        None
+        self.cur_idx += 1;
+        self.buf.push((input - BR_MEAN) / BR_STDEV);
+
+        if self.buf.full() {
+            let values = self.buf.get_values();
+            let value = values[values.len() - self.w - 1];
+            let cond_one = value
+                >= *values
+                    .iter()
+                    .skip(self.w * (self.m - 1))
+                    .max_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Equal))
+                    .unwrap();
+            let cond_two = value >= (values.iter().sum::<f32>() / values.len() as f32) + self.gamma;
+
+            let cond_three = value >= self.decay_avg;
+            self.decay_avg = value.max(self.alpha * self.decay_avg + (1.0 - self.alpha) * value);
+
+            if cond_one & cond_two & cond_three {
+                Some(self.cur_idx - self.w as u64)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
 
-// END: PeakPicker
+// END: BRPeakPicker
+
+// BEGIN: BRClusterer
+
+struct BRCluster {
+    pub latest_onset: u64,
+    pub diff: u64,
+}
+
+pub struct BRClusterer {
+    cur_idx: u64,
+    window_size: u64,
+    min_diff: u64,
+    max_diff: u64,
+    ordered_onsets: VecDeque<u64>,
+}
+
+impl BRClusterer {
+    pub fn new(window_size: usize, min_diff: u64, max_diff: u64) -> Self {
+        Self {
+            cur_idx: 0,
+            window_size: window_size as u64,
+            min_diff,
+            max_diff,
+            ordered_onsets: VecDeque::new(),
+        }
+    }
+}
+
+impl Transformer for BRClusterer {
+    type Input = Option<u64>;
+    type Output = bool;
+
+    fn transform(&mut self, input: Option<u64>) -> bool {
+        match input {
+            Some(onset) => {
+                self.ordered_onsets.push_front(onset);
+                while *self.ordered_onsets.front().unwrap() < onset - self.window_size {
+                    self.ordered_onsets.pop_front();
+                }
+                for onset_idx in 0..(self.ordered_onsets.len() - 1) {
+                    let diff = onset - self.ordered_onsets[onset_idx];
+                    if diff < self.min_diff || diff > self.max_diff {
+                        continue;
+                    }
+                }
+            }
+            None => {}
+        }
+        false
+    }
+}
+
+// END: BRClusterer
 
 // UNUSED...
 
 // BEGIN: VectorTwoChannelCombiner
 
-// pub struct VectorTwoChannelCombiner<I, O: Clone> {
-//     transformer_one: Box<dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>>,
-//     transformer_two: Box<dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>>,
-// }
-//
-// impl<I, O: Clone + 'static> VectorTwoChannelCombiner<I, O> {
-//     pub fn new(
-//         transformer_one: Box<
-//             dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>,
-//         >,
-//         transformer_two: Box<
-//             dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>,
-//         >,
-//     ) -> Self {
-//         Self {
-//             transformer_one,
-//             transformer_two,
-//         }
-//     }
-// }
-//
-// impl<I, O: Clone + 'static> Transformer for VectorTwoChannelCombiner<I, O> {
-//     type Input = TwoChannel<I>;
-//     type Output = Option<Box<dyn Iterator<Item = TwoChannel<O>>>>;
-//
-//     fn transform(
-//         &mut self,
-//         input: TwoChannel<I>,
-//     ) -> Option<Box<dyn Iterator<Item = TwoChannel<O>>>> {
-//         match (
-//             self.transformer_one.transform(input.0),
-//             self.transformer_two.transform(input.1),
-//         ) {
-//             (Some(l), Some(r)) => Some(Box::new(l.zip(r).map(|(l, r)| (l, r)))),
-//             (None, None) => None,
-//             // Possibly just log and don't actually panic, although this should really never
-//             // happen unless something is set up wrong with the program.
-//             _ => panic!("Unsynchronized channel transformers"),
-//         }
-//     }
-// }
+#[allow(dead_code)]
+pub struct VectorTwoChannelCombiner<I, O: Clone> {
+    transformer_one: Box<dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>>,
+    transformer_two: Box<dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>>,
+}
+
+#[allow(dead_code)]
+impl<I, O: Clone + 'static> VectorTwoChannelCombiner<I, O> {
+    pub fn new(
+        transformer_one: Box<
+            dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>,
+        >,
+        transformer_two: Box<
+            dyn Transformer<Input = I, Output = Option<Box<dyn Iterator<Item = O>>>>,
+        >,
+    ) -> Self {
+        Self {
+            transformer_one,
+            transformer_two,
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl<I, O: Clone + 'static> Transformer for VectorTwoChannelCombiner<I, O> {
+    type Input = TwoChannel<I>;
+    type Output = Option<Box<dyn Iterator<Item = TwoChannel<O>>>>;
+
+    fn transform(
+        &mut self,
+        input: TwoChannel<I>,
+    ) -> Option<Box<dyn Iterator<Item = TwoChannel<O>>>> {
+        match (
+            self.transformer_one.transform(input.0),
+            self.transformer_two.transform(input.1),
+        ) {
+            (Some(l), Some(r)) => Some(Box::new(l.zip(r).map(|(l, r)| (l, r)))),
+            (None, None) => None,
+            // Possibly just log and don't actually panic, although this should really never
+            // happen unless something is set up wrong with the program.
+            _ => panic!("Unsynchronized channel transformers"),
+        }
+    }
+}
 
 // END: VectorTwoChannelCombiner
