@@ -385,11 +385,12 @@ impl Transformer for BRPeakPicker {
 
 // BEGIN: BRClusterer
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct BRCluster {
     pub latest_onset: u64,
     pub diff: u64,
     pub value: f32,
+    pub size: usize,
 }
 
 pub struct BRClusterer {
@@ -397,17 +398,19 @@ pub struct BRClusterer {
     min_diff: u64,
     max_diff: u64,
     threshold: usize,
+    decay: f32,
     cluster_map: HashMap<u64, Vec<Rc<RefCell<BRCluster>>>>,
     best_cluster: Option<Rc<RefCell<BRCluster>>>,
 }
 
 impl BRClusterer {
-    pub fn new(min_diff: u64, max_diff: u64, threshold: usize) -> Self {
+    pub fn new(min_diff: u64, max_diff: u64, threshold: usize, decay: f32) -> Self {
         Self {
             cur_idx: 0,
             min_diff,
             max_diff,
             threshold,
+            decay,
             cluster_map: HashMap::new(),
             best_cluster: None,
         }
@@ -428,6 +431,21 @@ impl Transformer for BRClusterer {
                 for &other_onset in self.cluster_map.keys() {
                     let diff = onset - other_onset;
                     if diff < self.min_diff || diff > self.max_diff {
+                        // Clear best_cluster if it is one of the ones we're removing
+                        let mut clear = false;
+                        match (self.cluster_map.get(&other_onset), &self.best_cluster) {
+                            (Some(other_clusters), Some(best_cluster)) => {
+                                for cluster in other_clusters {
+                                    if *cluster.borrow() == *best_cluster.borrow() {
+                                        clear = true;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        if clear {
+                            self.best_cluster = None;
+                        }
                         continue;
                     }
 
@@ -459,6 +477,7 @@ impl Transformer for BRClusterer {
                             latest_onset: onset,
                             diff,
                             value: 0.0,
+                            size: 0,
                         })),
                     };
                     clusters.push(new_cluster);
@@ -471,7 +490,8 @@ impl Transformer for BRClusterer {
                 for cluster in &mut clusters {
                     let mut cluster_mut = cluster.borrow_mut();
                     cluster_mut.latest_onset = onset;
-                    cluster_mut.value = cluster_mut.value / 2.0 + value;
+                    cluster_mut.size += 1;
+                    cluster_mut.value = cluster_mut.value * self.decay + (1.0 - self.decay) * value;
                     if cluster_mut.value > highest_value {
                         highest_value = cluster_mut.value;
                         self.best_cluster = Some(Rc::clone(cluster));
@@ -488,6 +508,7 @@ impl Transformer for BRClusterer {
             Some(cluster_cell) => {
                 let cluster = cluster_cell.borrow();
                 if (self.cur_idx as i64 - cluster.latest_onset as i64) % cluster.diff as i64 == 0 {
+                    println!("{:?}", cluster);
                     true
                 } else {
                     false

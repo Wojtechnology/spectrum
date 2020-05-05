@@ -21,6 +21,6 @@ pub fn beat_tracking_transformer(
     );
     Box::new(PipelineTransformer::new(
         Box::new(peak_picked),
-        Box::new(BRClusterer::new(60, 600, 5)),
+        Box::new(BRClusterer::new(60, 600, 3, 0.9)),
     ))
 }
