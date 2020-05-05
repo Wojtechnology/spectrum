@@ -59,7 +59,7 @@ impl<I: Iterator<Item = i16>> AudioLoopState<I> {
                     .bt_transformer
                     .transform(Box::new(fft_complex_for_bt.into_iter()))
                 {
-                    println!("Beat");
+                    println!("Beat: {}", self.cur_idx);
                 };
 
                 let spect_viz = self

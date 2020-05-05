@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::VecDeque;
+use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use num_complex::Complex;
@@ -348,9 +350,9 @@ impl BRPeakPicker {
 
 impl Transformer for BRPeakPicker {
     type Input = f32;
-    type Output = Option<u64>; // Index of picked peak.
+    type Output = Option<(u64, f32)>; // Index of picked peak.
 
-    fn transform(&mut self, input: f32) -> Option<u64> {
+    fn transform(&mut self, input: f32) -> Option<(u64, f32)> {
         self.cur_idx += 1;
         self.buf.push((input - BR_MEAN) / BR_STDEV);
 
@@ -369,7 +371,7 @@ impl Transformer for BRPeakPicker {
             self.decay_avg = value.max(self.alpha * self.decay_avg + (1.0 - self.alpha) * value);
 
             if cond_one & cond_two & cond_three {
-                Some(self.cur_idx - self.w as u64)
+                Some((self.cur_idx - self.w as u64, value))
             } else {
                 None
             }
@@ -383,52 +385,116 @@ impl Transformer for BRPeakPicker {
 
 // BEGIN: BRClusterer
 
+#[derive(Debug)]
 struct BRCluster {
     pub latest_onset: u64,
     pub diff: u64,
+    pub value: f32,
 }
 
 pub struct BRClusterer {
     cur_idx: u64,
-    window_size: u64,
     min_diff: u64,
     max_diff: u64,
-    ordered_onsets: VecDeque<u64>,
+    threshold: usize,
+    cluster_map: HashMap<u64, Vec<Rc<RefCell<BRCluster>>>>,
+    best_cluster: Option<Rc<RefCell<BRCluster>>>,
 }
 
 impl BRClusterer {
-    pub fn new(window_size: usize, min_diff: u64, max_diff: u64) -> Self {
+    pub fn new(min_diff: u64, max_diff: u64, threshold: usize) -> Self {
         Self {
             cur_idx: 0,
-            window_size: window_size as u64,
             min_diff,
             max_diff,
-            ordered_onsets: VecDeque::new(),
+            threshold,
+            cluster_map: HashMap::new(),
+            best_cluster: None,
         }
     }
 }
 
 impl Transformer for BRClusterer {
-    type Input = Option<u64>;
+    type Input = Option<(u64, f32)>;
     type Output = bool;
 
-    fn transform(&mut self, input: Option<u64>) -> bool {
+    fn transform(&mut self, input: Option<(u64, f32)>) -> bool {
+        self.cur_idx += 1;
         match input {
-            Some(onset) => {
-                self.ordered_onsets.push_front(onset);
-                while *self.ordered_onsets.front().unwrap() < onset - self.window_size {
-                    self.ordered_onsets.pop_front();
-                }
-                for onset_idx in 0..(self.ordered_onsets.len() - 1) {
-                    let diff = onset - self.ordered_onsets[onset_idx];
+            Some((onset, value)) => {
+                let mut cluster_map = HashMap::new();
+                let mut clusters = Vec::new();
+                let threshold = self.threshold as i64;
+                for &other_onset in self.cluster_map.keys() {
+                    let diff = onset - other_onset;
                     if diff < self.min_diff || diff > self.max_diff {
                         continue;
                     }
+
+                    let new_cluster_opt = match self.cluster_map.get(&other_onset) {
+                        Some(other_clusters) => {
+                            let mut new_cluster = None;
+                            let new_other_clusters: Vec<Rc<RefCell<BRCluster>>> = other_clusters
+                                .iter()
+                                .filter(|&cluster| {
+                                    if (cluster.borrow().diff as i64 - diff as i64).abs()
+                                        <= threshold
+                                    {
+                                        new_cluster = Some(Rc::clone(cluster));
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                })
+                                .map(|x| Rc::clone(x))
+                                .collect();
+                            cluster_map.insert(other_onset, new_other_clusters);
+                            new_cluster
+                        }
+                        None => None,
+                    };
+                    let new_cluster = match new_cluster_opt {
+                        Some(new_clust) => new_clust,
+                        None => Rc::new(RefCell::new(BRCluster {
+                            latest_onset: onset,
+                            diff,
+                            value: 0.0,
+                        })),
+                    };
+                    clusters.push(new_cluster);
                 }
+
+                let mut highest_value = match &self.best_cluster {
+                    Some(cluster_cell) => cluster_cell.borrow().value,
+                    None => 0.0,
+                };
+                for cluster in &mut clusters {
+                    let mut cluster_mut = cluster.borrow_mut();
+                    cluster_mut.latest_onset = onset;
+                    cluster_mut.value = cluster_mut.value / 2.0 + value;
+                    if cluster_mut.value > highest_value {
+                        highest_value = cluster_mut.value;
+                        self.best_cluster = Some(Rc::clone(cluster));
+                    }
+                }
+
+                cluster_map.insert(onset, clusters);
+                self.cluster_map = cluster_map;
             }
             None => {}
         }
-        false
+
+        match &self.best_cluster {
+            Some(cluster_cell) => {
+                let cluster = cluster_cell.borrow();
+                if (self.cur_idx as i64 - cluster.latest_onset as i64) % cluster.diff as i64 == 0 {
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
     }
 }
 
