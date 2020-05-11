@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -387,31 +386,53 @@ impl Transformer for BRPeakPicker {
 
 #[derive(Debug, PartialEq)]
 struct BRCluster {
-    pub latest_onset: u64,
-    pub diff: u64,
+    pub latest_onset: f32,
+    pub diff: f32,
     pub value: f32,
     pub size: usize,
 }
 
+impl BRCluster {
+    pub fn new(onset: f32, diff: f32, value: f32) -> Self {
+        Self {
+            latest_onset: onset,
+            diff,
+            value,
+            size: 1,
+        }
+    }
+
+    pub fn update(&mut self, onset: f32, diff: f32, value: f32, decay: f32) {
+        self.latest_onset = onset;
+        self.size += 1;
+        self.diff = self.diff + (diff - self.diff) / (self.size as f32);
+        self.value = self.value * decay + value * (1.0 - decay);
+    }
+
+    fn score(&self) -> f32 {
+        return self.value * self.size as f32 * self.diff;
+    }
+}
+
 pub struct BRClusterer {
     cur_idx: u64,
-    min_diff: u64,
-    max_diff: u64,
-    threshold: usize,
+    min_diff: f32,
+    max_diff: f32,
+    threshold: f32,
     decay: f32,
-    cluster_map: HashMap<u64, Vec<Rc<RefCell<BRCluster>>>>,
+    clusters: Vec<(f32, Vec<Rc<RefCell<BRCluster>>>)>, // (onset, clusters ending on onset)
     best_cluster: Option<Rc<RefCell<BRCluster>>>,
 }
 
 impl BRClusterer {
-    pub fn new(min_diff: u64, max_diff: u64, threshold: usize, decay: f32) -> Self {
+    pub fn new(min_diff: f32, max_diff: f32, threshold: f32, decay: f32) -> Self {
         Self {
             cur_idx: 0,
             min_diff,
             max_diff,
             threshold,
             decay,
-            cluster_map: HashMap::new(),
+            clusters: Vec::new(),
             best_cluster: None,
         }
     }
@@ -426,16 +447,15 @@ impl Transformer for BRClusterer {
 
         match input {
             Some((onset, value)) => {
-                let mut cluster_map = HashMap::new();
+                let onset_fl = onset as f32;
                 let mut clusters = Vec::new();
-                let threshold = self.threshold as i64;
-                for &other_onset in self.cluster_map.keys() {
-                    let diff = onset - other_onset;
-                    if diff < self.min_diff || diff > self.max_diff {
-                        // Clear best_cluster if it is one of the ones we're removing
+                let mut cur_onset_clusters = Vec::new();
+                for (other_onset, other_clusters) in &self.clusters {
+                    let diff = onset_fl - *other_onset;
+                    if diff > self.max_diff {
                         let mut clear_best = false;
-                        match (self.cluster_map.get(&other_onset), &self.best_cluster) {
-                            (Some(other_clusters), Some(best_cluster)) => {
+                        match &self.best_cluster {
+                            Some(best_cluster) => {
                                 for cluster in other_clusters {
                                     if *cluster.borrow() == *best_cluster.borrow() {
                                         clear_best = true;
@@ -450,62 +470,59 @@ impl Transformer for BRClusterer {
                         continue;
                     }
 
-                    // Collect clusters that are being extended by the curent offset
-                    let new_cluster_opt = match self.cluster_map.get(&other_onset) {
-                        Some(other_clusters) => {
-                            let mut new_cluster = None;
-                            let new_other_clusters: Vec<Rc<RefCell<BRCluster>>> = other_clusters
-                                .iter()
-                                .filter(|&cluster| {
-                                    if (cluster.borrow().diff as i64 - diff as i64).abs()
-                                        <= threshold
-                                    {
-                                        new_cluster = Some(Rc::clone(cluster));
-                                        false
-                                    } else {
-                                        true
+                    if diff < self.min_diff {
+                        clusters.push((*other_onset, other_clusters.clone()));
+                    } else {
+                        // Collect clusters that are being extended by the current offset
+                        let mut new_clusters = Vec::new();
+                        let new_other_clusters: Vec<Rc<RefCell<BRCluster>>> = other_clusters
+                            .iter()
+                            .filter(|&cluster| {
+                                let cluster_diff = cluster.borrow().diff;
+                                let mut keep = true;
+                                for mult in &[1.0, 2.0, 3.0] {
+                                    let adj_diff = diff / mult;
+                                    if (cluster_diff - adj_diff).abs() <= self.threshold {
+                                        cluster
+                                            .borrow_mut()
+                                            .update(onset_fl, adj_diff, value, self.decay);
+                                        new_clusters.push(Rc::clone(cluster));
+                                        keep = false;
+                                        break;
                                     }
-                                })
-                                .map(|x| Rc::clone(x))
-                                .collect();
-                            cluster_map.insert(other_onset, new_other_clusters);
-                            new_cluster
+                                }
+                                keep
+                            })
+                            .map(|x| Rc::clone(x))
+                            .collect();
+                        clusters.push((*other_onset, new_other_clusters));
+
+                        if new_clusters.len() > 0 {
+                            for cluster in new_clusters {
+                                cur_onset_clusters.push(Rc::clone(&cluster));
+                            }
+                        } else {
+                            cur_onset_clusters
+                                .push(Rc::new(RefCell::new(BRCluster::new(onset_fl, diff, value))));
                         }
-                        None => None,
-                    };
-                    let new_cluster = match new_cluster_opt {
-                        // Found a cluster matching the diff
-                        Some(new_clust) => new_clust,
-                        // Didn't find a cluster matching the diff so creating a new one
-                        None => Rc::new(RefCell::new(BRCluster {
-                            latest_onset: onset,
-                            diff,
-                            value,
-                            size: 0,
-                        })),
-                    };
-                    clusters.push(new_cluster);
+                    }
                 }
 
-                let mut highest_value = match &self.best_cluster {
-                    Some(cluster_cell) => {
-                        cluster_cell.borrow().value * cluster_cell.borrow().size as f32
-                    }
+                // Update best cluster if it changes.
+                let mut highest_score = match &self.best_cluster {
+                    Some(cluster_cell) => cluster_cell.borrow().score(),
                     None => 0.0,
                 };
-                for cluster in &mut clusters {
-                    let mut cluster_mut = cluster.borrow_mut();
-                    cluster_mut.latest_onset = onset;
-                    cluster_mut.size += 1;
-                    cluster_mut.value = cluster_mut.value * self.decay + (1.0 - self.decay) * value;
-                    if cluster_mut.value * cluster_mut.size as f32 > highest_value {
-                        highest_value = cluster_mut.value * cluster_mut.size as f32;
-                        self.best_cluster = Some(Rc::clone(cluster));
+                for cluster_cell in &mut cur_onset_clusters {
+                    let score = cluster_cell.borrow().score();
+                    if score > highest_score {
+                        highest_score = score;
+                        self.best_cluster = Some(Rc::clone(cluster_cell));
                     }
                 }
 
-                cluster_map.insert(onset, clusters);
-                self.cluster_map = cluster_map;
+                clusters.push((onset_fl, cur_onset_clusters));
+                self.clusters = clusters;
             }
             None => {}
         }
@@ -514,7 +531,7 @@ impl Transformer for BRClusterer {
             Some(cluster_cell) => {
                 let cluster = cluster_cell.borrow();
                 if (self.cur_idx as i64 - cluster.latest_onset as i64) % cluster.diff as i64 == 0 {
-                    println!("{:?}", cluster);
+                    println!("Best\n{:?} with score {}", cluster, cluster.score());
                     true
                 } else {
                     false
