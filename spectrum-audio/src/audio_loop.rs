@@ -23,7 +23,7 @@ struct AudioLoopState<I: Iterator<Item = i16>> {
     viz_transformer:
         Box<dyn Transformer<Input = Box<dyn Iterator<Item = Complex<f32>>>, Output = Vec<f32>>>,
     bt_transformer:
-        Box<dyn Transformer<Input = Box<dyn Iterator<Item = Complex<f32>>>, Output = bool>>,
+        Box<dyn Transformer<Input = Box<dyn Iterator<Item = Complex<f32>>>, Output = Option<f32>>>,
     shared_data: Arc<RwLock<SharedData>>,
 }
 
@@ -55,11 +55,12 @@ impl<I: Iterator<Item = i16>> AudioLoopState<I> {
             Some(fft_complex) => {
                 let fft_complex_for_bt = fft_complex.clone();
 
-                if self
+                match self
                     .bt_transformer
                     .transform(Box::new(fft_complex_for_bt.into_iter()))
                 {
-                    println!("Beat: {}", self.cur_idx);
+                    Some(strength) => println!("BOOM @ {} - {} strong", self.cur_idx, strength),
+                    None => {}
                 };
 
                 let spect_viz = self

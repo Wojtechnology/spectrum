@@ -9,7 +9,7 @@ const GAMMA: f32 = 0.35;
 const ALPHA: f32 = 0.84;
 
 pub fn beat_tracking_transformer(
-) -> Box<dyn Transformer<Input = Box<dyn Iterator<Item = Complex<f32>>>, Output = bool>> {
+) -> Box<dyn Transformer<Input = Box<dyn Iterator<Item = Complex<f32>>>, Output = Option<f32>>> {
     let l1_transformer = IteratorMapper::new(complex_l1_norm);
     let spectral_fluxed = PipelineTransformer::new(
         Box::new(l1_transformer),

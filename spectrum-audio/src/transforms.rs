@@ -440,9 +440,9 @@ impl BRClusterer {
 
 impl Transformer for BRClusterer {
     type Input = Option<(u64, f32)>;
-    type Output = bool;
+    type Output = Option<f32>;
 
-    fn transform(&mut self, input: Option<(u64, f32)>) -> bool {
+    fn transform(&mut self, input: Option<(u64, f32)>) -> Option<f32> {
         self.cur_idx += 1;
 
         match input {
@@ -452,7 +452,8 @@ impl Transformer for BRClusterer {
                 let mut cur_onset_clusters = Vec::new();
                 for (other_onset, other_clusters) in &self.clusters {
                     let diff = onset_fl - *other_onset;
-                    if diff > self.max_diff {
+                    // NOTE: 3.0 factor to allow for missing up to two onsets to continue a cluster.
+                    if diff > self.max_diff * 3.0 {
                         let mut clear_best = false;
                         match &self.best_cluster {
                             Some(best_cluster) => {
@@ -470,7 +471,7 @@ impl Transformer for BRClusterer {
                         continue;
                     }
 
-                    if diff < self.min_diff {
+                    if diff < self.min_diff || diff > self.max_diff {
                         clusters.push((*other_onset, other_clusters.clone()));
                     } else {
                         // Collect clusters that are being extended by the current offset
@@ -531,13 +532,12 @@ impl Transformer for BRClusterer {
             Some(cluster_cell) => {
                 let cluster = cluster_cell.borrow();
                 if (self.cur_idx as i64 - cluster.latest_onset as i64) % cluster.diff as i64 == 0 {
-                    println!("Best\n{:?} with score {}", cluster, cluster.score());
-                    true
+                    Some(cluster.value)
                 } else {
-                    false
+                    None
                 }
             }
-            None => false,
+            None => None,
         }
     }
 }
