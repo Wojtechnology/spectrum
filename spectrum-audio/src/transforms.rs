@@ -423,6 +423,7 @@ impl Transformer for BRClusterer {
 
     fn transform(&mut self, input: Option<(u64, f32)>) -> bool {
         self.cur_idx += 1;
+
         match input {
             Some((onset, value)) => {
                 let mut cluster_map = HashMap::new();
@@ -432,23 +433,24 @@ impl Transformer for BRClusterer {
                     let diff = onset - other_onset;
                     if diff < self.min_diff || diff > self.max_diff {
                         // Clear best_cluster if it is one of the ones we're removing
-                        let mut clear = false;
+                        let mut clear_best = false;
                         match (self.cluster_map.get(&other_onset), &self.best_cluster) {
                             (Some(other_clusters), Some(best_cluster)) => {
                                 for cluster in other_clusters {
                                     if *cluster.borrow() == *best_cluster.borrow() {
-                                        clear = true;
+                                        clear_best = true;
                                     }
                                 }
                             }
                             _ => {}
                         }
-                        if clear {
+                        if clear_best {
                             self.best_cluster = None;
                         }
                         continue;
                     }
 
+                    // Collect clusters that are being extended by the curent offset
                     let new_cluster_opt = match self.cluster_map.get(&other_onset) {
                         Some(other_clusters) => {
                             let mut new_cluster = None;
@@ -472,11 +474,13 @@ impl Transformer for BRClusterer {
                         None => None,
                     };
                     let new_cluster = match new_cluster_opt {
+                        // Found a cluster matching the diff
                         Some(new_clust) => new_clust,
+                        // Didn't find a cluster matching the diff so creating a new one
                         None => Rc::new(RefCell::new(BRCluster {
                             latest_onset: onset,
                             diff,
-                            value: 0.0,
+                            value,
                             size: 0,
                         })),
                     };
@@ -484,7 +488,9 @@ impl Transformer for BRClusterer {
                 }
 
                 let mut highest_value = match &self.best_cluster {
-                    Some(cluster_cell) => cluster_cell.borrow().value,
+                    Some(cluster_cell) => {
+                        cluster_cell.borrow().value * cluster_cell.borrow().size as f32
+                    }
                     None => 0.0,
                 };
                 for cluster in &mut clusters {
@@ -492,8 +498,8 @@ impl Transformer for BRClusterer {
                     cluster_mut.latest_onset = onset;
                     cluster_mut.size += 1;
                     cluster_mut.value = cluster_mut.value * self.decay + (1.0 - self.decay) * value;
-                    if cluster_mut.value > highest_value {
-                        highest_value = cluster_mut.value;
+                    if cluster_mut.value * cluster_mut.size as f32 > highest_value {
+                        highest_value = cluster_mut.value * cluster_mut.size as f32;
                         self.best_cluster = Some(Rc::clone(cluster));
                     }
                 }
