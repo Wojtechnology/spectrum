@@ -1,0 +1,5 @@
+/jupyter/
+
+__pycache__
+.venv
+*.egg-info/
