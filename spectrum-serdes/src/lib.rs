@@ -12,6 +12,15 @@ pub struct SaveError {
     pub msg: String,
 }
 
+impl SaveError {
+    pub fn new(path: &str, msg: &str) -> Self {
+        Self {
+            path: String::from(path),
+            msg: String::from(msg),
+        }
+    }
+}
+
 pub trait AudioDataWriter {
     type Elem;
 
@@ -70,18 +79,12 @@ impl AudioDataWriter for TwoChannelWriter<f32> {
 
         let mut writer = match File::create(path) {
             Ok(writer) => Ok(writer),
-            Err(e) => Err(SaveError {
-                path: String::from(path),
-                msg: format!("{:?}", e),
-            }),
+            Err(e) => Err(SaveError::new(path, &format!("{:?}", e))),
         }?;
 
         match audio_data.write_to(&mut CodedOutputStream::new(&mut writer)) {
             Ok(()) => Ok(()),
-            Err(e) => Err(SaveError {
-                path: String::from(path),
-                msg: format!("{:?}", e),
-            }),
+            Err(e) => Err(SaveError::new(path, &format!("{:?}", e))),
         }
     }
 }
