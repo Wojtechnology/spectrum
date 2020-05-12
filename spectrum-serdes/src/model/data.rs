@@ -28,6 +28,11 @@ use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 
 #[derive(PartialEq,Clone,Default)]
 pub struct AudioDataMeta {
+    // message fields
+    pub size: u64,
+    pub channels: u32,
+    pub sample_rate: f64,
+    pub offset: i64,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -43,6 +48,66 @@ impl AudioDataMeta {
     pub fn new() -> AudioDataMeta {
         ::std::default::Default::default()
     }
+
+    // uint64 size = 1;
+
+
+    pub fn get_size(&self) -> u64 {
+        self.size
+    }
+    pub fn clear_size(&mut self) {
+        self.size = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_size(&mut self, v: u64) {
+        self.size = v;
+    }
+
+    // uint32 channels = 2;
+
+
+    pub fn get_channels(&self) -> u32 {
+        self.channels
+    }
+    pub fn clear_channels(&mut self) {
+        self.channels = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_channels(&mut self, v: u32) {
+        self.channels = v;
+    }
+
+    // double sample_rate = 3;
+
+
+    pub fn get_sample_rate(&self) -> f64 {
+        self.sample_rate
+    }
+    pub fn clear_sample_rate(&mut self) {
+        self.sample_rate = 0.;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_sample_rate(&mut self, v: f64) {
+        self.sample_rate = v;
+    }
+
+    // int64 offset = 4;
+
+
+    pub fn get_offset(&self) -> i64 {
+        self.offset
+    }
+    pub fn clear_offset(&mut self) {
+        self.offset = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_offset(&mut self, v: i64) {
+        self.offset = v;
+    }
 }
 
 impl ::protobuf::Message for AudioDataMeta {
@@ -54,6 +119,34 @@ impl ::protobuf::Message for AudioDataMeta {
         while !is.eof()? {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint64()?;
+                    self.size = tmp;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint32()?;
+                    self.channels = tmp;
+                },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeFixed64 {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_double()?;
+                    self.sample_rate = tmp;
+                },
+                4 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_int64()?;
+                    self.offset = tmp;
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -66,12 +159,36 @@ impl ::protobuf::Message for AudioDataMeta {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
+        if self.size != 0 {
+            my_size += ::protobuf::rt::value_size(1, self.size, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.channels != 0 {
+            my_size += ::protobuf::rt::value_size(2, self.channels, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.sample_rate != 0. {
+            my_size += 9;
+        }
+        if self.offset != 0 {
+            my_size += ::protobuf::rt::value_size(4, self.offset, ::protobuf::wire_format::WireTypeVarint);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if self.size != 0 {
+            os.write_uint64(1, self.size)?;
+        }
+        if self.channels != 0 {
+            os.write_uint32(2, self.channels)?;
+        }
+        if self.sample_rate != 0. {
+            os.write_double(3, self.sample_rate)?;
+        }
+        if self.offset != 0 {
+            os.write_int64(4, self.offset)?;
+        }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -110,7 +227,27 @@ impl ::protobuf::Message for AudioDataMeta {
         static mut descriptor: ::protobuf::lazy::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::lazy::Lazy::INIT;
         unsafe {
             descriptor.get(|| {
-                let fields = ::std::vec::Vec::new();
+                let mut fields = ::std::vec::Vec::new();
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
+                    "size",
+                    |m: &AudioDataMeta| { &m.size },
+                    |m: &mut AudioDataMeta| { &mut m.size },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
+                    "channels",
+                    |m: &AudioDataMeta| { &m.channels },
+                    |m: &mut AudioDataMeta| { &mut m.channels },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeDouble>(
+                    "sample_rate",
+                    |m: &AudioDataMeta| { &m.sample_rate },
+                    |m: &mut AudioDataMeta| { &mut m.sample_rate },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
+                    "offset",
+                    |m: &AudioDataMeta| { &m.offset },
+                    |m: &mut AudioDataMeta| { &mut m.offset },
+                ));
                 ::protobuf::reflect::MessageDescriptor::new_pb_name::<AudioDataMeta>(
                     "AudioDataMeta",
                     fields,
@@ -130,6 +267,10 @@ impl ::protobuf::Message for AudioDataMeta {
 
 impl ::protobuf::Clear for AudioDataMeta {
     fn clear(&mut self) {
+        self.size = 0;
+        self.channels = 0;
+        self.sample_rate = 0.;
+        self.offset = 0;
         self.unknown_fields.clear();
     }
 }
@@ -1151,15 +1292,18 @@ impl ::protobuf::reflect::ProtobufValue for AudioData {
 }
 
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n\ndata.proto\x12\0\"\x11\n\rAudioDataMeta:\0\"$\n\x0eF32ChannelData\
-    \x12\x10\n\x06values\x18\x01\x20\x03(\x02B\0:\0\"$\n\x0eF64ChannelData\
-    \x12\x10\n\x06values\x18\x01\x20\x03(\x01B\0:\0\"4\n\x0bF32Channels\x12#\
-    \n\x08channels\x18\x01\x20\x03(\x0b2\x0f.F32ChannelDataB\0:\0\"4\n\x0bF6\
-    4Channels\x12#\n\x08channels\x18\x01\x20\x03(\x0b2\x0f.F64ChannelDataB\0\
-    :\0\"\x89\x01\n\tAudioData\x12\x1e\n\x04meta\x18\x01\x20\x01(\x0b2\x0e.A\
-    udioDataMetaB\0\x12&\n\x0cf32_channels\x18\x02\x20\x01(\x0b2\x0c.F32Chan\
-    nelsH\0B\0\x12&\n\x0cf64_channels\x18\x03\x20\x01(\x0b2\x0c.F64ChannelsH\
-    \0B\0B\n\n\x08channels:\0B\0b\x06proto3\
+    \n\ndata.proto\x12\0\"^\n\rAudioDataMeta\x12\x0e\n\x04size\x18\x01\x20\
+    \x01(\x04B\0\x12\x12\n\x08channels\x18\x02\x20\x01(\rB\0\x12\x15\n\x0bsa\
+    mple_rate\x18\x03\x20\x01(\x01B\0\x12\x10\n\x06offset\x18\x04\x20\x01(\
+    \x03B\0:\0\"$\n\x0eF32ChannelData\x12\x10\n\x06values\x18\x01\x20\x03(\
+    \x02B\0:\0\"$\n\x0eF64ChannelData\x12\x10\n\x06values\x18\x01\x20\x03(\
+    \x01B\0:\0\"4\n\x0bF32Channels\x12#\n\x08channels\x18\x01\x20\x03(\x0b2\
+    \x0f.F32ChannelDataB\0:\0\"4\n\x0bF64Channels\x12#\n\x08channels\x18\x01\
+    \x20\x03(\x0b2\x0f.F64ChannelDataB\0:\0\"\x89\x01\n\tAudioData\x12\x1e\n\
+    \x04meta\x18\x01\x20\x01(\x0b2\x0e.AudioDataMetaB\0\x12&\n\x0cf32_channe\
+    ls\x18\x02\x20\x01(\x0b2\x0c.F32ChannelsH\0B\0\x12&\n\x0cf64_channels\
+    \x18\x03\x20\x01(\x0b2\x0c.F64ChannelsH\0B\0B\n\n\x08channels:\0B\0b\x06\
+    proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy::INIT;
