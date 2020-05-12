@@ -1,0 +1,29 @@
+syntax = 'proto3';
+
+message AudioDataMeta {
+
+}
+
+message F32ChannelData {
+  repeated float values = 1;
+}
+
+message F64ChannelData {
+  repeated double values = 1;
+}
+
+message F32Channels {
+  repeated F32ChannelData channels = 1;
+}
+
+message F64Channels {
+  repeated F64ChannelData channels = 1;
+}
+
+message AudioData {
+  AudioDataMeta meta = 1;
+  oneof channels {
+    F32Channels f32_channels = 2;
+    F64Channels f64_channels = 3;
+  }
+}

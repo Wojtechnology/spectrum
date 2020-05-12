@@ -1,5 +1,6 @@
 [workspace]
 members = [
     "spectrum-audio",
+    "spectrum-serdes",
     "spectrum-viz",
 ]
