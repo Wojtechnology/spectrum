@@ -1,6 +1,7 @@
-use std::fs::File;
+use std::io::{Read, Write};
+use std::marker::PhantomData;
 
-use protobuf::{CodedOutputStream, Message, RepeatedField};
+use protobuf::{CodedInputStream, Message, RepeatedField};
 
 mod model;
 
@@ -8,14 +9,25 @@ use model::data::{AudioData, AudioDataMeta, F32ChannelData, F32Channels};
 
 #[derive(Debug)]
 pub struct SaveError {
-    pub path: String,
     pub msg: String,
 }
 
 impl SaveError {
-    pub fn new(path: &str, msg: &str) -> Self {
+    pub fn new(msg: &str) -> Self {
         Self {
-            path: String::from(path),
+            msg: String::from(msg),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ReadError {
+    pub msg: String,
+}
+
+impl ReadError {
+    pub fn new(msg: &str) -> Self {
+        Self {
             msg: String::from(msg),
         }
     }
@@ -24,9 +36,9 @@ impl SaveError {
 pub trait AudioDataWriter {
     type Elem;
 
-    fn write(&mut self, elem: Self::Elem);
+    fn push(&mut self, elem: Self::Elem);
 
-    fn save(&self, path: &str) -> Result<(), SaveError>;
+    fn write(&self, writer: &mut dyn Write) -> Result<(), SaveError>;
 }
 
 pub struct TwoChannelWriter<T> {
@@ -48,11 +60,11 @@ impl<T> TwoChannelWriter<T> {
 impl AudioDataWriter for TwoChannelWriter<f32> {
     type Elem = (f32, f32);
 
-    fn write(&mut self, elem: (f32, f32)) {
+    fn push(&mut self, elem: (f32, f32)) {
         self.buffer.push(elem);
     }
 
-    fn save(&self, path: &str) -> Result<(), SaveError> {
+    fn write(&self, writer: &mut dyn Write) -> Result<(), SaveError> {
         let mut meta = AudioDataMeta::new();
         meta.set_size(self.buffer.len() as u64);
         meta.set_channels(2);
@@ -77,22 +89,66 @@ impl AudioDataWriter for TwoChannelWriter<f32> {
         audio_data.set_meta(meta);
         audio_data.set_f32_channels(channels);
 
-        let mut writer = match File::create(path) {
-            Ok(writer) => Ok(writer),
-            Err(e) => Err(SaveError::new(path, &format!("{:?}", e))),
-        }?;
-
-        match audio_data.write_to(&mut CodedOutputStream::new(&mut writer)) {
+        match audio_data.write_to_writer(writer) {
             Ok(()) => Ok(()),
-            Err(e) => Err(SaveError::new(path, &format!("{:?}", e))),
+            Err(e) => Err(SaveError::new(&format!("{:?}", e))),
         }
     }
 }
 
+impl AudioData {
+    pub fn from_reader(reader: &mut dyn Read) -> Result<Self, ReadError> {
+        let mut data = AudioData::new();
+        match data.merge_from(&mut CodedInputStream::new(reader)) {
+            Ok(()) => Ok(data),
+            Err(e) => Err(ReadError::new(&format!("{:?}", e))),
+        }
+    }
+}
+
+// pub struct TwoChannelReader<'a, T> {
+//     data: &'a AudioData,
+//     cursor: usize,
+//     phantom: PhantomData<T>,
+// }
+//
+// impl<'a, T> Iterator for TwoChannelReader<'a, T> {
+//     type Item = (T, T);
+//
+//     fn next(&mut self) -> Option<(T, T)> {
+//         let channels
+//         if cursor <
+//     }
+// }
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+    fn it_reads_and_writes_two_channel() {
+        let mut buf = Vec::<u8>::new();
+        let mut writer = TwoChannelWriter::new(44100.0, -100);
+        writer.push((123.0, 456.0));
+        writer.push((234.0, 345.0));
+        let write_res = writer.write(&mut buf);
+        write_res.expect("writer.write should be ok");
+
+        let audio_data = AudioData::from_reader(&mut &buf[..]).expect("should be able to read");
+        let meta = audio_data.get_meta();
+        assert_eq!(meta.get_size(), 2);
+        assert_eq!(meta.get_channels(), 2);
+        assert_eq!(meta.get_sample_rate(), 44100.0);
+        assert_eq!(meta.get_offset(), -100);
+        assert_eq!(audio_data.get_f32_channels().get_channels().len(), 2);
+        assert_eq!(
+            audio_data.get_f32_channels().get_channels()[0].get_values(),
+            &[123.0, 234.0],
+        );
+        assert_eq!(
+            audio_data.get_f32_channels().get_channels()[1].get_values(),
+            &[456.0, 345.0],
+        );
+        assert!(!audio_data.has_f64_channels(), "must not have f64 channels");
     }
 }
