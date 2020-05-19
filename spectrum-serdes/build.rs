@@ -2,7 +2,7 @@ use std::fs::{read_dir, remove_file, write};
 
 use protobuf_codegen_pure;
 
-const PROTOS: &[&str] = &["data", "sparse_stream"];
+const PROTOS: &[&str] = &["sparse_stream"];
 const PROTO_DIR: &str = "proto";
 const MODEL_DIR: &str = "src/model";
 
