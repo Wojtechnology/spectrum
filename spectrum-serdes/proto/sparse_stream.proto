@@ -1,0 +1,33 @@
+syntax = 'proto3';
+
+message SparseStreamMeta {
+  uint64 size = 1;
+  uint32 channels = 2;
+  double sample_rate = 3;
+}
+
+message F32SparsePoint {
+  uint64 index = 1;
+  repeated float values = 2;
+}
+
+message F64SparsePoint {
+  uint64 index = 1;
+  repeated double values = 2;
+}
+
+message F32SparseStream {
+  repeated F32SparsePoint points = 1;
+}
+
+message F64SparseStream {
+  repeated F64SparsePoint points = 1;
+}
+
+message SparseStream {
+  SparseStreamMeta meta = 1;
+  oneof stream {
+    F32SparseStream f32_stream = 2;
+    F64SparseStream f64_stream = 3;
+  }
+}
