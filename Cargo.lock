@@ -1627,6 +1627,7 @@ dependencies = [
  "rustfft 3.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.106 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_yaml 0.8.11 (registry+https://github.com/rust-lang/crates.io-index)",
+ "spectrum-serdes 0.1.0",
 ]
 
 [[package]]

@@ -3,9 +3,12 @@ use std::fs::File;
 use std::io::Read;
 use std::process;
 
+use spectrum_serdes::sparse::SparseStreamWriter;
+
 use spectrum_audio::audio_loop::generate_data;
 use spectrum_audio::config::Config;
 use spectrum_audio::mp3::Mp3Decoder;
+use spectrum_audio::raw_stream::RawStream;
 
 // TODO: Should really replace all of this with some command line arg parsing library.
 fn eprint_usage_and_exit() -> ! {
@@ -13,7 +16,10 @@ fn eprint_usage_and_exit() -> ! {
     let program_name = args
         .next()
         .expect("program name must exist, otherwise rust is broken");
-    eprintln!("usage: {} <config_path> <audio_path>", program_name);
+    eprintln!(
+        "usage: {} <config_path> <audio_path> <write_path>",
+        program_name
+    );
     process::exit(1);
 }
 
@@ -34,6 +40,7 @@ fn open_file(path: &str) -> Result<File, String> {
 struct Args {
     config_path: String,
     audio_path: String,
+    write_path: String,
 }
 
 impl Args {
@@ -43,15 +50,17 @@ impl Args {
 
         let config_path = get_arg(&mut args, "missing config_path")?;
         let audio_path = get_arg(&mut args, "missing audio_path")?;
+        let write_path = get_arg(&mut args, "missing write_path")?;
 
         Ok(Self {
             config_path,
             audio_path,
+            write_path,
         })
     }
 }
 
-fn init() -> Result<(Mp3Decoder<File>, Config), String> {
+fn init() -> Result<(Mp3Decoder<File>, Config, File), String> {
     let args = Args::from_env_args()?;
 
     let audio_reader = open_file(&args.audio_path)?;
@@ -69,23 +78,40 @@ fn init() -> Result<(Mp3Decoder<File>, Config), String> {
     let config = Config::from_yaml(&config_str)?;
     println!("{:?}", config);
 
-    Ok((decoder, config))
+    let writer = match File::create(&args.write_path) {
+        Ok(file) => Ok(file),
+        Err(e) => Err(format!("Error creating write file: {:?}", e)),
+    }?;
+
+    Ok((decoder, config, writer))
 }
 
 fn main() {
-    let (decoder, config) = match init() {
-        Ok((decoder, config)) => (decoder, config),
+    let (decoder, config, mut writer) = match init() {
+        Ok((decoder, config, writer)) => (decoder, config, writer),
         Err(e) => {
             eprintln!("{}", e);
             eprint_usage_and_exit();
         }
     };
+    let channels = match config.spectrogram.band_subset {
+        Some(band_subset) => band_subset.end - band_subset.start,
+        None => config.spectrogram.buffer_size,
+    } as u32;
+    let sample_rate = decoder.sample_rate() as f64;
+    let mut sparse_writer = SparseStreamWriter::new(channels, sample_rate);
 
     let data = generate_data(decoder, &config);
+
+    let mut idx = config.spectrogram.buffer_size as u64;
+    let incr = config.spectrogram.stutter_size as u64;
     for row in data.iter() {
-        for &val in row.iter() {
-            print!("{} ", val);
-        }
-        print!("\n");
+        sparse_writer.push(idx, row.clone());
+        idx += incr;
+    }
+
+    match sparse_writer.write(&mut writer) {
+        Ok(()) => (),
+        Err(e) => panic!("Failed writing spectrogram file: {:?}", e),
     }
 }
