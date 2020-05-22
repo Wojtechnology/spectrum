@@ -7,7 +7,7 @@ use num_complex::Complex;
 
 use crate::beat_tracking::beat_tracking_transformer;
 use crate::concurrent_tee::ConcurrentTee;
-use crate::config::Config;
+use crate::config::{Config, SpectrogramConfig};
 use crate::raw_stream::{find_format_with_sample_rate, RawStream};
 use crate::shared_data::SharedData;
 use crate::spectrogram::{
@@ -199,11 +199,11 @@ pub fn run_audio_loop<D: RawStream<i16> + 'static>(
 
 pub fn generate_data<D: RawStream<i16> + 'static>(
     mut decoder: D,
-    config: &Config,
+    config: &SpectrogramConfig,
 ) -> Vec<Vec<f32>> {
     let channels = decoder.channels();
     assert!(channels == 2, "Generating data only supports 2 channels");
-    let mut transformer = spectrogram_viz_transformer(&config.spectrogram, channels);
+    let mut transformer = spectrogram_viz_transformer(config, channels);
     let mut output = vec![];
     loop {
         let sample = match (decoder.next(), decoder.next()) {

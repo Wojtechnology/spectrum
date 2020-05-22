@@ -1,12 +1,11 @@
 use std::env;
 use std::fs::File;
-use std::io::Read;
 use std::process;
 use std::sync::{Arc, RwLock};
 use std::thread;
 
 use spectrum_audio::audio_loop::run_audio_loop;
-use spectrum_audio::config::Config;
+use spectrum_audio::config::{from_yaml_reader, Config};
 use spectrum_audio::mp3::Mp3Decoder;
 use spectrum_audio::shared_data::SharedData;
 use spectrum_viz::event_loop;
@@ -64,13 +63,8 @@ fn init() -> Result<(Mp3Decoder<File>, Config), String> {
         Err(e) => Err(format!("{}", e)),
     }?;
 
-    let mut config_reader = open_file(&args.config_path)?;
-    let mut config_str = String::new();
-    match config_reader.read_to_string(&mut config_str) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(format!("{}", e)),
-    }?;
-    let config = Config::from_yaml(&config_str)?;
+    let config_reader = open_file(&args.config_path)?;
+    let config = from_yaml_reader::<Config, File>(config_reader)?;
     println!("{:?}", config);
 
     Ok((decoder, config))

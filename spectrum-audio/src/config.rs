@@ -1,5 +1,12 @@
+use std::io::Read;
+
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
+
+pub trait ValidatedConfig {
+    fn validate(&self) -> Result<(), String>;
+}
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct SubsetConfig {
@@ -32,7 +39,7 @@ fn assertion(cond: bool, err_msg: &str) -> Result<(), String> {
     }
 }
 
-impl SpectrogramConfig {
+impl ValidatedConfig for SpectrogramConfig {
     fn validate(&self) -> Result<(), String> {
         assertion(self.buffer_size > 0, "buffer_size must be greater than 0")?;
         assertion(self.stutter_size > 0, "stutter_size must be greater than 0")?;
@@ -74,7 +81,7 @@ pub struct BeatTrackingConfig {
     pub decay: f32,
 }
 
-impl BeatTrackingConfig {
+impl ValidatedConfig for BeatTrackingConfig {
     fn validate(&self) -> Result<(), String> {
         assertion(
             self.alpha >= 0.0 && self.alpha <= 1.0,
@@ -101,20 +108,32 @@ pub struct Config {
     pub beat_tracking: BeatTrackingConfig,
 }
 
-impl Config {
-    pub fn from_yaml(s: &str) -> Result<Self, String> {
-        let config: Config = match serde_yaml::from_str(s) {
-            Ok(config) => Ok(config),
-            Err(e) => Err(format!("error parsing config: {}", e)),
-        }?;
-        match config.spectrogram.validate() {
+impl ValidatedConfig for Config {
+    fn validate(&self) -> Result<(), String> {
+        match self.spectrogram.validate() {
             Ok(()) => Ok(()),
             Err(e) => Err(format!("error validation spectrogram config: {}", e)),
         }?;
-        match config.beat_tracking.validate() {
+        match self.beat_tracking.validate() {
             Ok(()) => Ok(()),
             Err(e) => Err(format!("error validation spectrogram config: {}", e)),
         }?;
-        Ok(config)
+        Ok(())
     }
+}
+
+pub fn from_yaml_reader<T, R>(r: R) -> Result<T, String>
+where
+    T: ValidatedConfig + DeserializeOwned,
+    R: Read,
+{
+    let config: T = match serde_yaml::from_reader(r) {
+        Ok(config) => Ok(config),
+        Err(e) => Err(format!("error parsing config: {}", e)),
+    }?;
+    match config.validate() {
+        Ok(()) => Ok(()),
+        Err(e) => Err(format!("error validating spectrogram config: {}", e)),
+    }?;
+    Ok(config)
 }

@@ -1,12 +1,11 @@
 use std::env;
 use std::fs::File;
-use std::io::Read;
 use std::process;
 
 use spectrum_serdes::sparse::SparseStreamWriter;
 
 use spectrum_audio::audio_loop::generate_data;
-use spectrum_audio::config::Config;
+use spectrum_audio::config::{from_yaml_reader, SpectrogramConfig};
 use spectrum_audio::mp3::Mp3Decoder;
 use spectrum_audio::raw_stream::RawStream;
 
@@ -60,7 +59,7 @@ impl Args {
     }
 }
 
-fn init() -> Result<(Mp3Decoder<File>, Config, File), String> {
+fn init() -> Result<(Mp3Decoder<File>, SpectrogramConfig, File), String> {
     let args = Args::from_env_args()?;
 
     let audio_reader = open_file(&args.audio_path)?;
@@ -69,13 +68,8 @@ fn init() -> Result<(Mp3Decoder<File>, Config, File), String> {
         Err(e) => Err(format!("{}", e)),
     }?;
 
-    let mut config_reader = open_file(&args.config_path)?;
-    let mut config_str = String::new();
-    match config_reader.read_to_string(&mut config_str) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(format!("{}", e)),
-    }?;
-    let config = Config::from_yaml(&config_str)?;
+    let config_reader = open_file(&args.config_path)?;
+    let config = from_yaml_reader::<SpectrogramConfig, File>(config_reader)?;
     println!("{:?}", config);
 
     let writer = match File::create(&args.write_path) {
@@ -94,17 +88,17 @@ fn main() {
             eprint_usage_and_exit();
         }
     };
-    let channels = match config.spectrogram.band_subset {
+    let channels = match config.band_subset {
         Some(band_subset) => band_subset.end - band_subset.start,
-        None => config.spectrogram.buffer_size,
+        None => config.buffer_size,
     } as u32;
     let sample_rate = decoder.sample_rate() as f64;
     let mut sparse_writer = SparseStreamWriter::new(channels, sample_rate);
 
     let data = generate_data(decoder, &config);
 
-    let mut idx = config.spectrogram.buffer_size as u64;
-    let incr = config.spectrogram.stutter_size as u64;
+    let mut idx = config.buffer_size as u64;
+    let incr = config.stutter_size as u64;
     for row in data.iter() {
         sparse_writer.push(idx, row.clone());
         idx += incr;
