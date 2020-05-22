@@ -55,8 +55,50 @@ impl SpectrogramConfig {
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub struct BeatTrackingConfig {
+    // Hyperparameter for peak picking average decay.
+    pub alpha: f32,
+    // Parameters for window size used for finding the peak:
+    // Cond 1: true iff current point is the largest in [-w, w] window.
+    // Cond 2: true iff average of values in [-m * w, w] window + gamma is less than cur value.
+    pub w: usize,
+    pub m: usize,
+    pub gamma: f32,
+    // Minimum size of onset diff to consider for tempo.
+    pub min_diff: f32,
+    // Maximum size of onset diff to consider for tempo.
+    pub max_diff: f32,
+    // Maximum threshold to consider two diffs as the same.
+    pub threshold: f32,
+    // Rate of decay for cluster values.
+    pub decay: f32,
+}
+
+impl BeatTrackingConfig {
+    fn validate(&self) -> Result<(), String> {
+        assertion(
+            self.alpha >= 0.0 && self.alpha <= 1.0,
+            "alpha must be in [0, 1]",
+        )?;
+        assertion(
+            self.decay >= 0.0 && self.decay <= 1.0,
+            "decay must be in [0, 1]",
+        )?;
+        assertion(self.min_diff > 0.0, "min_diff must be greater than 0")?;
+        assertion(self.max_diff > 0.0, "max_diff must be greater than 0")?;
+        assertion(
+            self.min_diff <= self.max_diff,
+            "min_diff must be <= max_diff",
+        )?;
+        assertion(self.threshold > 0.0, "threshold must be greater than 0")?;
+        Ok(())
+    }
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     pub spectrogram: SpectrogramConfig,
+    pub beat_tracking: BeatTrackingConfig,
 }
 
 impl Config {
@@ -66,6 +108,10 @@ impl Config {
             Err(e) => Err(format!("error parsing config: {}", e)),
         }?;
         match config.spectrogram.validate() {
+            Ok(()) => Ok(()),
+            Err(e) => Err(format!("error validation spectrogram config: {}", e)),
+        }?;
+        match config.beat_tracking.validate() {
             Ok(()) => Ok(()),
             Err(e) => Err(format!("error validation spectrogram config: {}", e)),
         }?;

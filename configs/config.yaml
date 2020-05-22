@@ -2,3 +2,12 @@ spectrogram:
   buffer_size: 1024
   stutter_size: 128
   log_scaling: true
+beat_tracking:
+  alpha: 0.84
+  gamma: 0.35
+  w: 10
+  m: 3
+  min_diff: 103.0
+  max_diff: 344.0
+  threshold: 2.0
+  decay: 0.95

@@ -39,7 +39,7 @@ impl<I: Iterator<Item = i16>> AudioLoopState<I> {
             cur_idx: 0,
             fft_transformer: fft_transformer(&config.spectrogram, channels),
             viz_transformer: viz_transformer(&config.spectrogram),
-            bt_transformer: beat_tracking_transformer(),
+            bt_transformer: beat_tracking_transformer(&config.beat_tracking),
             shared_data,
         }
     }
