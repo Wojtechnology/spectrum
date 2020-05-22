@@ -1,7 +1,4 @@
 spectrogram:
   buffer_size: 1024
   stutter_size: 128
-  log_scaling: false
-  band_subset:
-    start: 0
-    end: 512
+  log_scaling: true
