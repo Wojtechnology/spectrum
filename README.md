@@ -6,6 +6,7 @@ Gotta install a very specific version of this library.
 ```
 cd ..
 git clone https://github.com/gfx-rs/gfx.git
+cd gfx
 git checkout f999b5295ca30dc38f33b0a4770a31d50138687c
 ```
 
@@ -13,7 +14,7 @@ git checkout f999b5295ca30dc38f33b0a4770a31d50138687c
 Cargo isn't super good at specifying features in workspaces which is why you do it this way.
 ```
 cd spectrum-viz
-cargo run --release --features metal <filename>
+cargo run --release --features metal <config_path> <audio_path>
 ```
 `filename` refers to the MP3 file you want to visualize. TODO: Document configuration for the visualizer once that is more polished.
 
