@@ -1,5 +1,6 @@
 use std::borrow;
 use std::cell::RefCell;
+use std::io::Cursor;
 use std::iter;
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
@@ -11,6 +12,7 @@ use hal::buffer;
 use hal::command;
 use hal::format as f;
 use hal::image as i;
+use hal::pool;
 use hal::prelude::*;
 use hal::pso;
 use hal::pso::ShaderStageFlags;
@@ -23,10 +25,12 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 
 use crate::backend_state::BackendState;
 use crate::buffer_state::BufferState;
+use crate::desc_set::DescSetLayout;
 use crate::device_state::DeviceState;
 use crate::framebuffer_state::{FramebufferState, MAX_FRAMES_IN_FLIGHT};
 use crate::gx_constant;
 use crate::gx_object::{TriIndexData, VertexData};
+use crate::image_state::ImageState;
 use crate::pipeline_state::PipelineState;
 use crate::render_pass_state::RenderPassState;
 use crate::screen_size_state::ScreenSizeState;
@@ -86,6 +90,7 @@ pub struct RendererState<B: Backend> {
     triangle_vertex_buffer: BufferState<B>,
     model_vertex_buffers: Vec<BufferState<B>>,
     index_buffer: BufferState<B>,
+    texture_state: ImageState<B>,
     pipeline: PipelineState<B>,
     framebuffer: FramebufferState<B>,
     device: Rc<RefCell<DeviceState<B>>>,
@@ -181,8 +186,80 @@ impl<B: Backend> RendererState<B> {
 
         let framebuffer = FramebufferState::new(Rc::clone(&device));
 
+        // All this for a picture
+        let desc_set_layout = DescSetLayout::new(
+            Rc::clone(&device),
+            vec![
+                pso::DescriptorSetLayoutBinding {
+                    binding: 0,
+                    ty: pso::DescriptorType::Image {
+                        ty: pso::ImageDescriptorType::Sampled { with_sampler: true },
+                    },
+                    count: 1,
+                    stage_flags: ShaderStageFlags::FRAGMENT,
+                    immutable_samplers: false,
+                },
+                pso::DescriptorSetLayoutBinding {
+                    binding: 1,
+                    ty: pso::DescriptorType::Sampler,
+                    count: 1,
+                    stage_flags: ShaderStageFlags::FRAGMENT,
+                    immutable_samplers: false,
+                },
+            ],
+        );
+
+        let mut desc_pool = device
+            .borrow()
+            .device
+            .create_descriptor_pool(
+                1,
+                &[
+                    pso::DescriptorRangeDesc {
+                        ty: pso::DescriptorType::Image {
+                            ty: pso::ImageDescriptorType::Sampled { with_sampler: true },
+                        },
+                        count: 1,
+                    },
+                    pso::DescriptorRangeDesc {
+                        ty: pso::DescriptorType::Image {
+                            ty: pso::ImageDescriptorType::Sampled { with_sampler: true },
+                        },
+                        count: 1,
+                    },
+                ],
+                pso::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET,
+            )
+            .unwrap();
+
+        let desc_set = desc_set_layout.create_desc_set(&mut desc_pool);
+
+        let mut staging_pool = device
+            .borrow()
+            .device
+            .create_command_pool(
+                device.borrow().queues.family,
+                pool::CommandPoolCreateFlags::empty(),
+            )
+            .expect("Can't create staging command pool");
+
+        const IMAGE_DATA: &'static [u8] = include_bytes!("../../textures/img.png");
+        let img = image::load(Cursor::new(&IMAGE_DATA[..]), image::PNG)
+            .unwrap()
+            .to_rgba();
+
+        let texture_state = ImageState::new(
+            desc_set,
+            &img,
+            &backend.adapter,
+            &mut device.borrow_mut(),
+            &mut staging_pool,
+        );
+
+        device.borrow().device.destroy_command_pool(staging_pool);
+
         let pipeline = PipelineState::new(
-            Vec::<B::DescriptorSetLayout>::new(),
+            vec![texture_state.get_layout()],
             render_pass.render_pass.as_ref().unwrap(),
             Rc::clone(&device),
         );
@@ -197,6 +274,7 @@ impl<B: Backend> RendererState<B> {
             model_vertex_buffers,
             index_buffer,
             render_pass,
+            texture_state,
             pipeline,
             framebuffer,
             viewport,
@@ -323,6 +401,12 @@ impl<B: Backend> RendererState<B> {
                 ShaderStageFlags::VERTEX,
                 0,
                 cast_slice::<f32, u32>(&self.view_proj_mat.data),
+            );
+            cmd_buffer.bind_graphics_descriptor_sets(
+                self.pipeline.pipeline_layout.as_ref().unwrap(),
+                0,
+                vec![self.texture_state.desc.set.as_ref().unwrap()],
+                &[],
             );
 
             cmd_buffer.begin_render_pass(

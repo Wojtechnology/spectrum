@@ -34,7 +34,6 @@ impl<B: Backend> ImageState<B> {
         mut desc: DescSet<B>,
         img: &::image::ImageBuffer<::image::Rgba<u8>, Vec<u8>>,
         adapter: &AdapterState<B>,
-        usage: buffer::Usage,
         device_state: &mut DeviceState<B>,
         staging_pool: &mut B::CommandPool,
     ) -> Self {
@@ -43,7 +42,7 @@ impl<B: Backend> ImageState<B> {
             &mut device_state.device,
             img,
             adapter,
-            usage,
+            buffer::Usage::TRANSFER_SRC,
         );
 
         let buffer = Some(buffer);
@@ -171,6 +170,7 @@ impl<B: Backend> ImageState<B> {
                 iter::once(&cmd_buffer),
                 Some(&mut transfered_image_fence),
             );
+            staging_pool.free(iter::once(cmd_buffer));
         }
 
         ImageState {
