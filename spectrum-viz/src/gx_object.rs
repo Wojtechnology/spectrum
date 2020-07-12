@@ -22,7 +22,7 @@ pub type VertexData<T> = [T; 8];
 pub type TriIndexData<T> = [T; 3];
 
 #[derive(Debug, Clone, Copy)]
-struct Vertex<T>
+pub struct Vertex<T>
 where
     T: Copy,
 {
@@ -86,6 +86,10 @@ where
         }
     }
 
+    pub fn from_vec(vertices: Vec<Vertex<T>>) -> Self {
+        Vertices { vertices }
+    }
+
     pub fn add(
         &mut self,
         pos_x: T,
@@ -112,7 +116,7 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TriIndex<T>
+pub struct TriIndex<T>
 where
     T: Copy,
 {
@@ -150,6 +154,10 @@ where
         TriIndices {
             indices: Vec::<TriIndex<T>>::new(),
         }
+    }
+
+    pub fn from_vec(indices: Vec<TriIndex<T>>) -> Self {
+        TriIndices { indices }
     }
 
     pub fn add(&mut self, pt1: T, pt2: T, pt3: T) {

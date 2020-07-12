@@ -10,16 +10,17 @@ metal = ["gfx-backend-metal"]
 vulkan = ["gfx-backend-vulkan"]
 
 [dependencies]
+arrayvec = "0.4"
+gfx = "0.18"
+gfx-backend-empty = "0.4"
+gfx-hal = { path = "../../gfx/src/hal", version = "0.4", package = "gfx-hal" }
+glsl-to-spirv = "0.1.4"
 image = "0.21"
 log = "0.4"
-winit = "0.20.0"
-arrayvec = "0.4"
-glsl-to-spirv = "0.1.4"
-gfx = "0.18"
-gfx-hal = { path = "../../gfx/src/hal", version = "0.4", package = "gfx-hal" }
-gfx-backend-empty = "0.4"
 nalgebra-glm = "0.2"
+obj-rs = "0.6"
 spectrum-audio = { path = "../spectrum-audio" }
+winit = "0.20.0"
 
 [target.'cfg(debug_assertions)'.dependencies]
 env_logger = "0.6"

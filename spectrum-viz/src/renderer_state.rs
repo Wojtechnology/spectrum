@@ -28,7 +28,7 @@ use crate::buffer_state::BufferState;
 use crate::desc_set::DescSetLayout;
 use crate::device_state::DeviceState;
 use crate::framebuffer_state::{FramebufferState, MAX_FRAMES_IN_FLIGHT};
-use crate::gx_constant;
+use crate::gx_model::GxModel;
 use crate::gx_object::{TriIndexData, VertexData};
 use crate::image_state::ImageState;
 use crate::pipeline_state::PipelineState;
@@ -153,16 +153,21 @@ impl<B: Backend> RendererState<B> {
 
         println!("Memory types: {:?}", backend.adapter.memory_types);
 
+        let model = match GxModel::from_obj(String::from("../models/cube.obj")) {
+            Ok(model) => model,
+            Err(e) => panic!(e),
+        };
+
         let triangle_vertex_buffer = BufferState::new::<VertexData<f32>>(
             Rc::clone(&device),
-            &gx_constant::cube_vertices(),
+            &model.vertices.data(),
             buffer::Usage::VERTEX,
             &backend.adapter.memory_types,
         );
 
         let index_buffer = BufferState::new::<TriIndexData<u16>>(
             Rc::clone(&device),
-            &gx_constant::cube_indices(),
+            &model.indices.data(),
             buffer::Usage::INDEX,
             &backend.adapter.memory_types,
         );

@@ -6,6 +6,7 @@ pub mod device_state;
 pub mod event_loop;
 pub mod framebuffer_state;
 pub mod gx_constant;
+pub mod gx_model;
 pub mod gx_object;
 pub mod image_state;
 pub mod pipeline_state;
