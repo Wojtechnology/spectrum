@@ -153,7 +153,7 @@ impl<B: Backend> RendererState<B> {
 
         println!("Memory types: {:?}", backend.adapter.memory_types);
 
-        let model = match GxModel::from_obj(String::from("../models/cube.obj")) {
+        let model = match GxModel::from_obj(String::from("../models/untitled.obj")) {
             Ok(model) => model,
             Err(e) => panic!(e),
         };
